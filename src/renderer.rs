@@ -709,7 +709,6 @@ pub struct Renderer {
     width: u32,
     height: u32,
     output_format: wgpu::TextureFormat,
-    internal_format: wgpu::TextureFormat,
     pixel_scale: f32,
     text_paused: bool,
     geometry: wgpu::RenderPipeline,
@@ -723,9 +722,6 @@ pub struct Renderer {
     targets: [Target; 4], // 0,1 layer ping-pong; 2,3 scene ping-pong
     static_cache: Option<StaticLayerCache>,
     prefix_cache: Option<StaticPrefixCache>,
-    layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    geometry_uniform: wgpu::Buffer,
     composite: wgpu::RenderPipeline,
     present: wgpu::RenderPipeline,
     layers: Vec<LayerPipeline>,
@@ -923,7 +919,6 @@ impl Renderer {
                 width,
                 height,
                 output_format,
-                internal_format,
                 pixel_scale: 1.0,
                 text_paused: false,
                 geometry,
@@ -937,9 +932,6 @@ impl Renderer {
                 targets,
                 static_cache,
                 prefix_cache,
-                layout,
-                sampler,
-                geometry_uniform,
                 composite,
                 present,
                 layers,
@@ -959,6 +951,9 @@ impl Renderer {
     pub fn set_text_paused(&mut self, paused: bool) { self.text_paused = paused; }
     pub fn update_command_text(&mut self, gpu: &Gpu, values: &crate::text_commands::Values) {
         let Some(sprites) = &mut self.sprites else { return; };
+        // Shared source + font + canvas yields identical pixels for glow and foreground.
+        // Retain only the most recent raster to bound temporary CPU storage.
+        let mut previous: Option<((String, Option<String>, u32, u32, u32, u32), crate::sprites::Raster)> = None;
         for (&(li,si), asset) in &mut sprites.commands {
             let shape = &self.scene.layers[li].shapes[si];
             let name = shape.text_source.as_ref().expect("command source");
@@ -969,11 +964,19 @@ impl Renderer {
             let Some(value) = value else { continue; };
             let mut shape = shape.clone();
             shape.text = Some(value.clone());
-            let result = crate::sprites::rasterize(&shape, Path::new("."), &mut sprites.fonts)
-                .and_then(|r| crate::sprites::fit_canvas(r, asset.width, asset.height));
-            match result {
-                Ok(mut raster) => {
-                    raster.premultiplied_linear_srgb();
+            let key = (name.clone(), shape.font_family.clone(), shape.font_size.to_bits(), shape.line_height.to_bits(), asset.width, asset.height);
+            if previous.as_ref().is_none_or(|(k, _)| *k != key) {
+                previous = None;
+                match crate::sprites::rasterize(&shape, Path::new("."), &mut sprites.fonts)
+                    .and_then(|r| crate::sprites::fit_canvas(r, asset.width, asset.height)) {
+                    Ok(mut raster) => {
+                        raster.premultiplied_linear_srgb();
+                        previous = Some((key, raster));
+                    }
+                    Err(e) => eprintln!("Text command {name}: cannot display output: {e:#}; using default (increase layout if needed)"),
+                }
+            }
+            if let Some((_, raster)) = &previous {
                     gpu.queue.write_texture(
                         wgpu::ImageCopyTexture { texture: &asset.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                         &raster.rgba,
@@ -981,8 +984,6 @@ impl Renderer {
                         extent(asset.width, asset.height),
                     );
                     asset.valid = true;
-                }
-                Err(e) => eprintln!("Text command {name}: cannot display output: {e:#}; using default (increase layout if needed)"),
             }
         }
     }
@@ -993,45 +994,6 @@ impl Renderer {
             if let Some(cache) = &mut self.static_cache { cache.valid = false; }
             if let Some(cache) = &mut self.prefix_cache { cache.valid = false; }
         }
-    }
-    pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) -> Result<()> {
-        if (width, height) == (self.width, self.height) {
-            return Ok(());
-        }
-        check_size(gpu, width, height)?;
-        self.targets = std::array::from_fn(|_| {
-            Target::new(
-                gpu,
-                &self.layout,
-                &self.sampler,
-                &self.uniform,
-                width,
-                height,
-                self.internal_format,
-            )
-        });
-        // Release old caches before allocating their replacements.
-        self.static_cache = None;
-        self.prefix_cache = None;
-        self.static_cache = StaticLayerCache::new(
-            gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height, self.internal_format,
-        );
-        self.prefix_cache = StaticPrefixCache::new(
-            gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height,
-            self.static_cache.is_some(), self.internal_format,
-        );
-        gpu.queue.write_buffer(
-            &self.geometry_uniform,
-            0,
-            bytemuck::cast_slice(&[width as f32, height as f32, 0., 0.]),
-        );
-        self.width = width;
-        self.height = height;
-        // Do not mix timestamps from different render resolutions in a report.
-        if let Some(old) = self.profiler.take() {
-            self.profiler = Some(FrameProfiler::new(gpu, old.label.clone()));
-        }
-        Ok(())
     }
     pub fn enable_profile(&mut self, gpu: &Gpu, label: String) {
         if gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {

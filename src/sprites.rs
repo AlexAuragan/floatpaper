@@ -3,11 +3,13 @@ use crate::scene::{Shape, ShapeKind};
 use anyhow::{bail, Context, Result};
 use cosmic_text::{Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache, Wrap};
 use resvg::{tiny_skia, usvg};
-use std::{fs, path::Path};
+use std::{fs, io::Read, path::Path};
 
 pub const MAX_SIDE: u32 = 4096;
+const MAX_SVG_BYTES: u64 = 16 * 1024 * 1024;
 pub const MAX_BYTES: usize = 64 * 1024 * 1024;
 
+#[derive(Clone)]
 pub struct Raster {
     pub width: u32,
     pub height: u32,
@@ -25,11 +27,23 @@ impl Raster {
     pub fn premultiplied_linear_srgb(&mut self) {
         // Store linear-premultiplied RGB encoded as sRGB, with linear alpha.
         // Hardware decoding happens before filtering, preventing dark fringes.
+        // A lookup table replaces up to three nonlinear conversions per pixel.
+        let decode: [f32; 256] = std::array::from_fn(|i| {
+            let v = i as f32 / 255.;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        });
+        let encode_white: [u8; 256] = std::array::from_fn(|i| {
+            let linear = i as f32 / 255.;
+            let encoded = if linear <= 0.0031308 { linear * 12.92 } else { 1.055 * linear.powf(1./2.4) - 0.055 };
+            (encoded * 255.).round().clamp(0.,255.) as u8
+        });
         for p in self.rgba.chunks_exact_mut(4) {
+            if p[3] == 0 { p[..3].fill(0); continue; }
+            if p[3] == 255 { continue; }
+            if p[..3] == [255,255,255] { let v = encode_white[p[3] as usize]; p[..3].fill(v); continue; }
             let a = p[3] as f32 / 255.;
             for c in &mut p[..3] {
-                let v = *c as f32 / 255.;
-                let linear = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) } * a;
+                let linear = decode[*c as usize] * a;
                 let encoded = if linear <= 0.0031308 { linear * 12.92 } else { 1.055 * linear.powf(1./2.4) - 0.055 };
                 *c = (encoded * 255.).round().clamp(0.,255.) as u8;
             }
@@ -41,7 +55,11 @@ pub fn rasterize(shape: &Shape, base: &Path, fonts: &mut Option<FontSystem>) -> 
     match shape.kind {
         ShapeKind::Svg => {
             let path = base.join(shape.path.as_ref().context("SVG requires path")?);
-            let data = fs::read(&path).with_context(|| format!("Read SVG {}", path.display()))?;
+            let file = fs::File::open(&path).with_context(|| format!("Open SVG {}", path.display()))?;
+            if !file.metadata()?.is_file() { bail!("SVG asset must be a regular file"); }
+            let mut data = Vec::new();
+            file.take(MAX_SVG_BYTES + 1).read_to_end(&mut data)?;
+            if data.len() as u64 > MAX_SVG_BYTES { bail!("SVG source exceeds 16 MiB"); }
             let mut options = usvg::Options::default();
             options.resources_dir = path.parent().map(Path::to_path_buf);
             // SVG text uses system fonts; vector-only SVGs also work without them.

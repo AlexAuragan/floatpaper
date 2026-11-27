@@ -4,7 +4,7 @@ use calloop::channel::Sender;
 use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
-    os::unix::{fs::FileTypeExt, net::{UnixListener, UnixStream}},
+    os::unix::{fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt}, net::{UnixListener, UnixStream}},
     path::PathBuf,
     sync::mpsc,
     thread,
@@ -81,6 +81,10 @@ pub struct Request {
 
 fn socket_path() -> Result<PathBuf> {
     let runtime = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?);
+    let meta = fs::metadata(&runtime).context("Inspect XDG_RUNTIME_DIR")?;
+    if !runtime.is_absolute() || !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+        bail!("XDG_RUNTIME_DIR must be an absolute private directory owned by the current user");
+    }
     let display = std::env::var_os("WAYLAND_DISPLAY").unwrap_or_else(|| "wayland-0".into());
     let display = std::path::Path::new(&display).file_name().context("Invalid WAYLAND_DISPLAY")?;
     let mut name = std::ffi::OsString::from("floatpaper-");
@@ -101,7 +105,11 @@ impl Server {
     pub fn bind() -> Result<Self> {
         let path = socket_path()?;
         let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false)
+            .mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path.with_extension("lock")).context("Open Floatpaper control lock")?;
+        let meta = lock.metadata()?;
+        if !meta.is_file() || meta.uid() != unsafe { libc::geteuid() } || meta.nlink() != 1 { bail!("Unsafe Floatpaper control lock"); }
+        lock.set_permissions(fs::Permissions::from_mode(0o600))?;
         lock.try_lock().map_err(|e| anyhow::anyhow!(
             "Cannot acquire Floatpaper control lock (another controlled instance may be running): {e}"))?;
         match fs::symlink_metadata(&path) {
@@ -111,6 +119,10 @@ impl Server {
             Err(e) => return Err(e).context("Inspect control socket"),
         }
         let listener = UnixListener::bind(&path).context("Bind Floatpaper control socket")?;
+        if let Err(e) = fs::set_permissions(&path, fs::Permissions::from_mode(0o600)) {
+            if let Err(cleanup) = fs::remove_file(&path) { eprintln!("Remove failed control socket: {cleanup}"); }
+            return Err(e).context("Restrict control socket permissions");
+        }
         Ok(Self { listener, path, _lock: lock })
     }
 
