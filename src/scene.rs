@@ -90,6 +90,8 @@ pub struct ShapeAudio {
     #[serde(default)] pub size: f32,
     #[serde(default)] pub position: [f32;2],
     #[serde(default)] pub spin: f64,
+    /// Additional motion speed as a multiple of the base rate.
+    #[serde(default)] pub speed: f64,
     #[serde(default)] pub color: Option<String>,
     #[serde(default)] pub opacity: f32,
 }
@@ -238,6 +240,8 @@ pub struct Shape {
     pub sides: u32,
     #[serde(default)]
     pub motion: Motion,
+    /// Reverse horizontal wrap travel without changing the period.
+    #[serde(default)] pub wrap_left: bool,
     #[serde(default = "radius_default")]
     pub radius: [f32; 2],
     #[serde(default)] pub direction: Direction,
@@ -426,7 +430,7 @@ impl Scene {
                 }
                 if let Some(a) = &shape.audio {
                     a.response().validate()?;
-                    if !(-0.99..=10.0).contains(&a.size) || !(-1.0..=1.0).contains(&a.opacity) || !(-100.0..=100.0).contains(&a.spin) || !a.position.iter().all(|p| (-1.0..=1.0).contains(p)) { bail!("Invalid shape audio modulation range"); }
+                    if !(-0.99..=10.0).contains(&a.size) || !(-1.0..=1.0).contains(&a.opacity) || !(-100.0..=100.0).contains(&a.spin) || !(-1.0..=20.0).contains(&a.speed) || !a.position.iter().all(|p| (-1.0..=1.0).contains(p)) { bail!("Invalid shape audio modulation range"); }
                     if let Some(color) = &a.color { parse_color(color)?; if shape.preserve_color { bail!("Audio color requires a tinted sprite or analytic shape"); } }
                 }
                 match shape.kind {
@@ -542,12 +546,14 @@ impl Scene {
                     let mut audio_size = 1.0;
                     let mut audio_opacity = shape.opacity;
                     let mut audio_spin = 0.;
+                    let mut audio_motion_time = 0.;
                     let mut audio_position = [0.;2];
                     if let Some(a) = &shape.audio {
                         let v = modulation.value;
                         audio_size += a.size*v;
                         audio_opacity = (shape.opacity+a.opacity*v).clamp(0.,1.);
                         audio_spin = (a.spin*modulation.integral).rem_euclid(1.);
+                        audio_motion_time = a.speed * modulation.integral;
                         audio_position = [a.position[0]*v,a.position[1]*v];
                         if let Some(target) = &a.color {
                             let target = parse_color(target).expect("validated audio color");
@@ -602,10 +608,11 @@ impl Scene {
                         let mut y = center[1] + shape.spread[1] * (2.0 * r(2) - 1.0) as f32;
                         let phase = (shape.phase + if shape.count > 1 { r(3) } else { 0.0 }) * TAU;
                         let rate = cyclic_rate(1.0 / shape.period, self.loop_seconds);
-                        let a = TAU * rate * t + phase;
+                        let motion_cycles = rate * t + (rate * audio_motion_time).rem_euclid(1.);
+                        let a = TAU * motion_cycles + phase;
                         let mut motion_angle = 0.0;
                         let mut motion_alpha = 1.0;
-                        let progress = (rate * t + phase / TAU).rem_euclid(1.0) as f32;
+                        let progress = (motion_cycles + phase / TAU).rem_euclid(1.0) as f32;
                         match shape.motion {
                             Motion::Static => {}
                             Motion::Orbit => {
@@ -637,7 +644,8 @@ impl Scene {
                             }
                             Motion::Wrap => {
                                 // Travel horizontally; shader draws edge copies for a continuous wrap.
-                                x = (x + (rate * t) as f32).rem_euclid(1.0);
+                                let direction = if shape.wrap_left { -1.0 } else { 1.0 };
+                                x = (x + (direction * motion_cycles) as f32).rem_euclid(1.0);
                                 y += shape.radius[1] * a.sin() as f32;
                             }
                         }
@@ -827,9 +835,36 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
+    }
+    #[test]
+    fn wrap_left_and_audio_speed_are_continuous() {
+        let s: Scene = toml::from_str(r#"
+[[layers]]
+name = "stars"
+[[layers.shapes]]
+kind = "circle"
+motion = "wrap"
+wrap_left = true
+radius = [0.0,0.0]
+period = 10.0
+[layers.shapes.audio]
+signal = "bass"
+speed = 2.0
+attack = 0.0
+decay = 0.0
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
+        let responses = s.audio_responses();
+        let mut frame = audio::Frame::default();
+        let x = |t, f: &audio::Frame| s.instances_with_audio(t,100.,100.,1.,f)[0].over[0].center_size[0];
+        assert!((x(1.,&frame)-0.4).abs()<1e-6);
+        frame.advance(audio::Signals { bass: 1., ..Default::default() },&responses,1.,true);
+        assert!((x(1.,&frame)-0.2).abs()<1e-6);
+        frame.advance(audio::Signals::default(),&responses,1.,true);
+        assert!((x(2.,&frame)-0.1).abs()<1e-6);
     }
     #[test]
     fn spectrum_bars_grow_from_fixed_bottom_and_hide_in_silence() {
