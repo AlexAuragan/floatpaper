@@ -79,6 +79,7 @@ MP4 cannot display live command output or audio reactivity; export warns and use
 ## Documentation
 
 - [Scene format, shaders, runtime controls and performance options](docs/REFERENCE.md)
+- [Shader library, variant previews and technique references](docs/SHADERS.md)
 - `floatpaper --help` and `floatpaper <command> --help`
 
 License: [MIT](LICENSE).
