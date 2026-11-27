@@ -43,10 +43,10 @@ impl Commands {
                 while !stop.load(Ordering::Acquire) {
                     if !active.load(Ordering::Acquire) {
                         due = Instant::now();
-                        thread::sleep(POLL);
+                        thread::park();
                         continue;
                     }
-                    if Instant::now() < due { thread::sleep(POLL.min(due.saturating_duration_since(Instant::now()))); continue; }
+                    if Instant::now() < due { thread::park_timeout(due.saturating_duration_since(Instant::now())); continue; }
                     let start = Instant::now();
                     let result = execute(&command, &base, timeout, || !active.load(Ordering::Acquire) || stop.load(Ordering::Acquire));
                     let mut map = values.lock().expect("command values mutex poisoned");
@@ -74,6 +74,7 @@ impl Commands {
     pub fn set_active(&self, active: bool) {
         let previous = self.active.swap(active, Ordering::AcqRel);
         if previous && !active { self.values.lock().expect("command values mutex poisoned").clear(); }
+        if previous != active { for worker in &self.workers { worker.thread().unpark(); } }
     }
     pub fn snapshot(&self) -> Values { self.values.lock().expect("command values mutex poisoned").clone() }
 }
@@ -81,6 +82,7 @@ impl Drop for Commands {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         self.active.store(false, Ordering::Release);
+        for worker in &self.workers { worker.thread().unpark(); }
         for worker in self.workers.drain(..) {
             if worker.join().is_err() { eprintln!("Text command worker panicked"); }
         }
@@ -96,7 +98,7 @@ impl Drop for Running {
         if let Err(e) = self.0.wait() { eprintln!("Reap text command: {e}"); }
     }
 }
-fn execute(command: &[String], base: &PathBuf, timeout: Duration, cancelled: impl Fn() -> bool) -> Result<String> {
+fn execute(command: &[String], base: &Path, timeout: Duration, cancelled: impl Fn() -> bool) -> Result<String> {
     if cancelled() { bail!("cancelled"); }
     let start = Instant::now();
     let mut child = Running(Command::new(&command[0]).args(&command[1..]).current_dir(base)
