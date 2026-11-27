@@ -36,7 +36,7 @@ spin = 0.025
 pulse = 0.15
 ```
 
-Layers are painted in file order, back to front. Each shape declaration generates `count` instances with deterministic random offsets, size variation and phases; use separate declarations with `count=1` to control shapes individually. Coordinates use the top-left origin and normalized screen coordinates (x and y each 0..1). Sizes are full bounding-box dimensions relative to viewport **height**, so equal x/y sizes retain their aspect ratio on wide monitors. Motion radii are in normalized screen coordinates. Shapes can drift offscreen. `wrap` moves horizontally, drawing translated edge copies. Colors accept `#RRGGBB` or `#RRGGBBAA`; layer and shape opacity multiply existing alpha. `outline=0` fills the shape; positive values produce a stroke. Shape rotation is in degrees, `spin` in signed turns per second, `phase` in cycles. `pulse` (0..1) modulates size.
+Layers are painted in file order, back to front. Each shape declaration generates `count` instances with deterministic random offsets, size variation and phases; use separate declarations with `count=1` to control shapes individually. Coordinates use the top-left origin and normalized screen coordinates (x and y each 0..1). Sizes are full bounding-box dimensions relative to viewport **height**, so equal x/y sizes retain their aspect ratio on wide monitors. Motion radii are in normalized screen coordinates. Shapes can drift offscreen. `wrap` moves horizontally, drawing translated edge copies. Set `wrap_left = true` to reverse direction (default false); use `radius = [0, 0]` for straight horizontal travel. Colors accept `#RRGGBB` or `#RRGGBBAA`; layer and shape opacity multiply existing alpha. `outline=0` fills the shape; positive values produce a stroke. Shape rotation is in degrees, `spin` in signed turns per second, `phase` in cycles. `pulse` (0..1) modulates size.
 
 Shape types: `circle`, `rectangle`, `triangle`, `polygon` (3–32 `sides`), `ray`, `svg`, `text`, `spectrum`. Motion types: `static`, `orbit`, `drift` (combined harmonics), `wrap`, `radial`, `linear`.
 
@@ -199,6 +199,7 @@ The response is a normalized value v in [0,1]. Every specified property shares t
 | color | Interpolate linear RGBA toward target hex color; unsupported with preserve_color |
 | position | Seeded displacement in normalized screen coordinates, each component -1..1 |
 | spin | Add spin * v turns/sec, integrated continuously; -100..100 |
+| speed | Multiply base motion rate by 1 + speed * v; -1..20, default 0. Integrated continuously, also affects motion-linked pulse, but not rotation (use spin separately). |
 
 For effects use `[layers.effects.audio]` or `[effects.audio]` for global effects, with `intensity` (-100..100) added to the base strength and clamped to 0..100; the shader may clamp further.
 
@@ -210,7 +211,7 @@ For effects use `[layers.effects.audio]` or `[effects.audio]` for global effects
 | logarithmic | Default true; ln(1+9v)/ln(10) |
 | power | 0.1..8, default 1; requires logarithmic=false if nondefault |
 
-Zero attack/decay is immediate. Broad energy signals already have a short internal smoothing stage. Onset and kick are adaptive spectral-change pulses (kick emphasizes frequencies up to 150 Hz), not a beat/tempo tracker. Strength variants multiply pulses by impact amplitude. 
+Audio-driven motion and rotation retain accumulated phase after silence, avoiding jumps. Live audio does not guarantee a seamless loop; offline export uses zero audio input. Zero attack/decay is immediate. Broad energy signals already have a short internal smoothing stage. Onset and kick are adaptive spectral-change pulses (kick emphasizes frequencies up to 150 Hz), not a beat/tempo tracker. Strength variants multiply pulses by impact amplitude. 
 
 Glitch defaults to `continuous = true`: displacement amplitude follows intensity without the built-in burst gate. Period controls smooth pattern variation. Set `continuous = false` for the original periodic bursts. This changes the appearance of older glitch scenes that omit the flag.
 
