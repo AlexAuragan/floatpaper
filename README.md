@@ -133,6 +133,14 @@ During preview or live mode, the scene directory and initially referenced extern
 
 All built-in animations are pure functions of scene time and deterministic seeds. For a loop of duration T, an animation with requested rate r is snapped to the nearest nonzero integer number of cycles per T (zero remains zero). Thus rotations, orbital motion, drift, size pulses and built-in effect phases repeat. Very slow motions can be noticeably accelerated in short loops. Horizontal wrapping adds edge copies; extremely wide shapes can overlap their own copies. Custom shaders must obey the same periodicity contract. Export samples `t = frame / fps` for frames 0 through N-1; it does not duplicate the first frame at the end.
 
+## Static rendering caches
+
+Floatpaper automatically caches one contiguous run of fully static layers and, when useful, one static geometry/effect prefix in a partially animated layer. A prefix ends before the first time-dependent effect; subsequent effects run every frame. Only built-in grid, blur and CRT with no intensity pulse are considered static. Animated geometry, noise, glitch and custom shaders are excluded conservatively.
+
+The prefix texture is populated once with an exact GPU-side texture copy, then sampled directly by the dynamic suffix. Both caches are rebuilt on resize or scene reload. The combined extra texture storage is limited to 64 MiB per output; if only one cache fits, the existing static layer cache takes priority.
+
+Set `FLOATPAPER_DISABLE_PREFIX_CACHE=1` to disable just prefix caching, or `FLOATPAPER_DISABLE_CACHE=1` to disable both. These are startup options and do not change scene files.
+
 ## GPU profiling (live or preview)
 
 Run with the optional timestamp profiler enabled:
