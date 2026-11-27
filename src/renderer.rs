@@ -203,6 +203,7 @@ fn geometry_is_static(layer: &scene::Layer) -> bool {
         matches!(shape.motion, scene::Motion::Static)
             && shape.spin == 0.0
             && shape.pulse == 0.0
+            && shape.text_source.is_none()
     })
 }
 
@@ -579,7 +580,7 @@ struct LayerPipeline {
 struct SpriteGeometry {
     over: wgpu::RenderPipeline,
     cutout: wgpu::RenderPipeline,
-    assets: BTreeMap<(usize, usize), wgpu::BindGroup>,
+    assets: BTreeMap<(usize, usize), Vec<wgpu::BindGroup>>,
 }
 impl SpriteGeometry {
     fn new(gpu: &Gpu, scene: &Scene, base: &Path, viewport: &wgpu::Buffer,
@@ -627,8 +628,13 @@ impl SpriteGeometry {
         for (li, layer) in scene.layers.iter().enumerate() {
             for (si, shape) in layer.shapes.iter().enumerate() {
                 if !shape.kind.is_sprite() { continue; }
-                let mut raster = crate::sprites::rasterize(shape, base, &mut fonts)
-                    .with_context(|| format!("Rasterize layer '{}' shape {si}", layer.name))?;
+                let rasters = if let Some(name) = &shape.text_source {
+                    crate::sprites::sequence_rasters(shape, &scene.text_sources[name].frames(), base, &mut fonts)
+                } else {
+                    crate::sprites::rasterize(shape, base, &mut fonts).map(|r| vec![r])
+                }.with_context(|| format!("Rasterize layer '{}' shape {si}", layer.name))?;
+                let mut bindings = Vec::with_capacity(rasters.len());
+                for mut raster in rasters {
                 bytes += raster.rgba.len();
                 if bytes > crate::sprites::MAX_BYTES { bail!("Sprite textures exceed 64 MiB per renderer"); }
                 check_size(gpu, raster.width, raster.height)?;
@@ -656,7 +662,9 @@ impl SpriteGeometry {
                         wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
                     ],
                 });
-                assets.insert((li, si), bind);
+                bindings.push(bind);
+                }
+                assets.insert((li, si), bindings);
             }
         }
         eprintln!("Sprite assets: {} ({:.2} MiB)", assets.len(), bytes as f64 / 1048576.);
@@ -689,6 +697,7 @@ pub struct Renderer {
     output_format: wgpu::TextureFormat,
     internal_format: wgpu::TextureFormat,
     pixel_scale: f32,
+    text_paused: bool,
     geometry: wgpu::RenderPipeline,
     geometry_cutout: wgpu::RenderPipeline,
     sprites: Option<SpriteGeometry>,
@@ -902,6 +911,7 @@ impl Renderer {
                 output_format,
                 internal_format,
                 pixel_scale: 1.0,
+                text_paused: false,
                 geometry,
                 geometry_cutout,
                 sprites,
@@ -932,6 +942,7 @@ impl Renderer {
         }
         result
     }
+    pub fn set_text_paused(&mut self, paused: bool) { self.text_paused = paused; }
     pub fn set_pixel_scale(&mut self, scale: u32) {
         assert!(scale > 0);
         if self.pixel_scale != scale as f32 {
@@ -1082,7 +1093,9 @@ impl Renderer {
                             for (key, run) in geometry_runs(&flat, range.clone()) {
                                 if let Some(si) = key {
                                     pass.set_pipeline(if is_cutout { &sprites.cutout } else { &sprites.over });
-                                    pass.set_bind_group(0, &sprites.assets[&(i, si)], &[]);
+                                    let frame = self.scene.layers[i].shapes[si].text_source.as_ref()
+                                        .map_or(0, |name| self.scene.text_sources[name].frame(t, self.scene.loop_seconds, self.text_paused));
+                                    pass.set_bind_group(0, &sprites.assets[&(i, si)][frame], &[]);
                                 } else {
                                     pass.set_pipeline(if is_cutout { &self.geometry_cutout } else { &self.geometry });
                                     pass.set_bind_group(0, &self.geo_bind, &[]);
