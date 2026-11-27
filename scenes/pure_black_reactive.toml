@@ -56,7 +56,7 @@ spin = 0.0083333333
 [layers.shapes.audio]
 signal = "bass"
 speed = 1.0
-spin = 0.0249999999
+spin = 0.025
 attack = 0.005
 decay = 0.15
 
@@ -84,7 +84,7 @@ pulse = 0.2
 [layers.shapes.audio]
 signal = "bass"
 speed = 3.0
-spin = -0.07500000000000001
+spin = -0.075
 attack = 0.005
 decay = 0.15
 
@@ -105,7 +105,7 @@ spin = 0.0125
 [layers.shapes.audio]
 signal = "bass"
 speed = 3.0
-spin = 0.037500000000000006
+spin = 0.0375
 attack = 0.005
 decay = 0.15
 
@@ -131,7 +131,7 @@ spin = 0.0166666667
 [layers.shapes.audio]
 signal = "bass"
 speed = 3.0
-spin = 0.0500000001
+spin = 0.05
 attack = 0.005
 decay = 0.15
 
@@ -153,7 +153,7 @@ spin = -0.0125
 [layers.shapes.audio]
 signal = "bass"
 speed = 3.0
-spin = -0.037500000000000006
+spin = -0.0375
 attack = 0.005
 decay = 0.15
 
@@ -176,7 +176,7 @@ spin = 0.0083333333
 [layers.shapes.audio]
 signal = "bass"
 speed = 3.0
-spin = 0.0249999999
+spin = 0.025
 attack = 0.005
 decay = 0.15
 
@@ -196,7 +196,7 @@ rotation = 30.0
 [layers.shapes.audio]
 signal = "bass"
 speed = 3.0
-spin = -0.0249999999
+spin = -0.025
 attack = 0.005
 decay = 0.15
 
