@@ -36,7 +36,7 @@ spin = 0.025
 pulse = 0.15
 ```
 
-Layers are painted in file order, back to front. Each shape declaration generates `count` instances with deterministic random offsets, size variation and phases; use separate declarations with `count=1` to control shapes individually. Coordinates use the top-left origin and normalized screen coordinates (x and y each 0..1). Sizes are full bounding-box dimensions relative to viewport **height**, so equal x/y sizes retain their aspect ratio on wide monitors. Motion radii are in normalized screen coordinates. Shapes can drift offscreen. `wrap` moves horizontally, drawing translated edge copies. Set `wrap_left = true` to reverse direction (default false); use `radius = [0, 0]` for straight horizontal travel. Colors accept `#RRGGBB` or `#RRGGBBAA`; layer and shape opacity multiply existing alpha. `outline=0` fills the shape; positive values produce a stroke. Shape rotation is in degrees, `spin` in signed turns per second, `phase` in cycles. `pulse` (0..1) modulates size.
+Layers are painted in file order, back to front. Each shape declaration generates `count` instances with deterministic random offsets, size variation and phases; use separate declarations with `count=1` to control shapes individually. Coordinates use the top-left origin and normalized screen coordinates (x and y each 0..1). Sizes are full bounding-box dimensions relative to viewport **height**, so equal x/y sizes retain their aspect ratio on wide monitors. For consistent relative shape area on portrait and landscape screens, set scene-level `size_reference_aspect = 1.7777778` (16:9). Relative sizes are then multiplied by `sqrt((width / height) / size_reference_aspect)`; shapes retain their proportions, and pixel sizes, positions, counts and motion radii are unchanged. Omitting the setting preserves height-based sizing. Allowed reference aspects: 0.1..10. Motion radii are in normalized screen coordinates. Shapes can drift offscreen. `wrap` moves horizontally, drawing translated edge copies. Set `wrap_left = true` to reverse direction (default false); use `radius = [0, 0]` for straight horizontal travel. Colors accept `#RRGGBB` or `#RRGGBBAA`; layer and shape opacity multiply existing alpha. `outline=0` fills the shape; positive values produce a stroke. Shape rotation is in degrees, `spin` in signed turns per second, `phase` in cycles. `pulse` (0..1) modulates size.
 
 Shape types: `circle`, `rectangle`, `triangle`, `polygon` (3–32 `sides`), `ray`, `svg`, `text`, `spectrum`. Motion types: `static`, `orbit`, `drift` (combined harmonics), `wrap`, `radial`, `linear`.
 
@@ -75,11 +75,11 @@ opacity = 0.46
 - Anchors are static named normalized-screen positions shared across layers. `anchor = "ship"` replaces the shape's center; optional `anchor_offset = [dx, dy]` adds a normalized-screen offset. Changing the anchor moves all dependent shapes. Anchors are not hierarchical or animated in this version. Individual shapes can animate relative to their anchor.
 - Existing orbit/drift/wrap coordinates and behavior are unchanged; only radial/linear distances use viewport-height units for aspect-correct direction.
 
-See `scenes/spaceship_loading.toml` for a combined SVG spacecraft, multiline Unicode HUD, and native radial rays. 
+See `scenes/spaceship.toml` for a combined SVG spacecraft, multiline Unicode HUD, and native radial rays. 
 
 ### Responsive HUD positioning
 
-Any shape can use `origin` (top_left, top_center, top_right, center_left, center, center_right, bottom_left, bottom_center, bottom_right), `position` and `position_unit = "px"` or `"relative"`. Positive offsets from right/bottom edges point inward. `attachment` uses the same nine values and defaults to origin; it is also the rotation pivot. Pixel sizes use `size_unit = "px"`; relative sizes still use viewport height. Pixels are logical pixels in Wayland preview/live (integer scale) and output pixels in export. Do not combine origin/position with a named anchor or nondefault center.
+Any shape can use `origin` (top_left, top_center, top_right, center_left, center, center_right, bottom_left, bottom_center, bottom_right), `position` and `position_unit = "px"` or `"relative"`. Positive offsets from right/bottom edges point inward. `attachment` uses the same nine values and defaults to origin; it is also the rotation pivot. Pixel sizes use `size_unit = "px"`; relative sizes use viewport height unless `size_reference_aspect` is set. Pixels are logical pixels in Wayland preview/live (integer scale) and output pixels in export. Do not combine origin/position with a named anchor or nondefault center.
 
 ### SVG, text and dynamic HUD
 
@@ -121,8 +121,8 @@ Sequences preload their textures, support blank frames, and snap their cycle to 
 
 ```sh
 bash scenes/scripts/telemetry.sh
-cargo run --release -- trust scenes/spaceship_telemetry.toml
-cargo run --release -- preview scenes/spaceship_telemetry.toml
+cargo run --release -- trust scenes/spaceship_reactive.toml
+cargo run --release -- preview scenes/spaceship_reactive.toml
 ```
 
 The demo script reads Linux procfs and sysfs. GPU utilization is the maximum available AMD GPU busy percentage, and temperature is the highest exposed Intel/AMD CPU package/control temperature. Missing sensors display `--`. The demo is separate from `spaceship_loading.toml`.
@@ -235,7 +235,7 @@ attack = 0.005
 decay = 0.08
 ```
 
-Spectrum uses the same FFT as audio modulation, with 64 logarithmically spaced bands from 30 Hz to 16 kHz. Fewer bars take the maximum of adjacent band responses. Bars grow upwards within the maximum-size bounding box and vanish in silence. Sizes and attachment follow ordinary shape layout (relative sizes are viewport-height units). Bars default to 64 (1..64), gap to 0.25 (0..0.95), attack to 0.005s, decay to 0.08s, and logarithmic to true. These fields are directly on the spectrum shape, not an audio subtable. The spectrum does not support count other than 1, motion, rotation, spin, pulse, spread, size_jitter or an additional shape audio block. Color, opacity, outline and compositing use the normal rectangle renderer. Adjacent bass bars can share FFT bins due to the roughly 23 Hz frequency resolution. No external CAVA process is needed.
+Spectrum uses the same FFT as audio modulation, with 64 logarithmically spaced bands from 30 Hz to 16 kHz. Fewer bars take the maximum of adjacent band responses. Bars grow upwards within the maximum-size bounding box and vanish in silence. Sizes and attachment follow ordinary shape layout (relative sizes follow the scene's size reference). Bars default to 64 (1..64), gap to 0.25 (0..0.95), attack to 0.005s, decay to 0.08s, and logarithmic to true. These fields are directly on the spectrum shape, not an audio subtable. The spectrum does not support count other than 1, motion, rotation, spin, pulse, spread, size_jitter or an additional shape audio block. Color, opacity, outline and compositing use the normal rectangle renderer. Adjacent bass bars can share FFT bins due to the roughly 23 Hz frequency resolution. No external CAVA process is needed.
 
 ### Audio shader uniforms
 
