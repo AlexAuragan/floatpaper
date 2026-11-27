@@ -154,6 +154,18 @@ Paths are relative to the scene TOML file. A custom shader defines `fn effect(uv
 
 During preview or live mode, the scene directory and initially referenced external shader directories are watched. Edits are debounced; a malformed config or shader should be rejected with diagnostics and the previous scene retained. The scene clock keeps running across reloads. Built-in WGSL files are embedded at compile time; copy one into a custom shader if you want to edit it live, or rebuild after editing built-ins. Adding a reference to a new external shader directory requires a restart for that directory to be watched. The watcher may react to unrelated file changes in watched directories; keep exports outside them where practical.
 
+### Experimental procedural materials
+
+The `scenes/crystallized_material.toml` example layers custom shaders on top of existing SVG geometry. No additional material syntax is needed.
+
+| Shader | Parameters |
+|---|---|
+| `material_stone.wgsl` | intensity = contrast (0..1), spacing = coarse grain size (pixels), rotation = light direction (degrees), color = reflected light tint, offset = light-center offset (pixels) |
+| `material_contact_shadow.wgsl` | intensity = shadow amount (0..1), spacing = sample radius (pixels), rotation = direction (degrees); darkens the inside of alpha-mask edges, not other layers |
+| `material_atmosphere.wgsl` | intensity = haze opacity (0..1), spacing = cloud scale (pixels), color = tint, period = drift cycle (seconds) |
+
+Stone and edge-occlusion shaders preserve alpha. They operate in screen space, rather than object-local coordinates, and are best suited to static layers. The existing renderer conservatively treats custom effects as dynamic, even when they do not use time. The experimental scene therefore incurs additional full-resolution effect passes; profile before adopting it as a default wallpaper.
+
 ## Audio reactivity
 
 Enable playback audio per scene (no CLI flag needed):
