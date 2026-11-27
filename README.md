@@ -32,8 +32,7 @@ Edit the scene while running to hot-reload it. Use `floatpaper pause`, `resume`,
 | Scene | Demonstrates |
 |---|---|
 | [circles_of_death](scenes/circles_of_death.toml) | Crimson battlefield, rotating cog and procedural snowfall |
-| [crystallized](scenes/crystallized.toml) | Layered crystal cavern and floating faceted diamond |
-| [crystallized_material](scenes/crystallized_material.toml) | Experimental procedural rock shading, edge occlusion and haze |
+| [crystallized](scenes/crystallized.toml) | Layered crystal cavern, procedural materials and floating diamond emblem |
 | [minimal](scenes/minimal.toml) | Basic shapes and animation |
 | [pure_black](scenes/pure_black.toml) | Layered effects |
 | [cutout](scenes/cutout.toml) | Cutouts, grids and glitch |
