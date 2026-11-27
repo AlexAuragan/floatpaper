@@ -171,6 +171,18 @@ Set `FLOATPAPER_COMPACT_INTERMEDIATES=1` at startup to use RGBA8UnormSrgb rather
 
 This is opt-in because 8-bit RGB and alpha quantization and clamping to [0,1] can change results, especially dark gradients, translucent edges, repeated blending and custom effects that output extended-range values. Do not use it if exact visual fidelity or prior export reproduction is required. Compare both modes with profiling enabled, then measure GPU utilization with profiling disabled.
 
+## GPU selection (live)
+
+Live mode defaults to `FLOATPAPER_GPU=auto`: read the compositor's default linux-dmabuf feedback (protocol v4+), resolve its main DRM device through Linux device nodes/sysfs, then select a surface-compatible Vulkan adapter with the matching PCI vendor/device IDs. This avoids hardcoding card numbers or assuming that a low-power GPU is cheaper when the compositor is on another GPU.
+
+Overrides, for live mode only:
+
+- `FLOATPAPER_GPU=low-power`: original wgpu low-power preference.
+- `FLOATPAPER_GPU=high-performance`: wgpu high-performance preference (not an exact GPU selector).
+- `FLOATPAPER_GPU=vvvv:dddd`: explicit hexadecimal PCI vendor/device ID, as displayed by `lspci -nn`.
+
+Auto mode logs its match or a reason for falling back to the original low-power policy. Explicit PCI selection errors when no compatible adapter or multiple matching Vulkan adapters exist. wgpu 0.19 exposes PCI model IDs rather than a unique physical DRM identity, so identical GPU models cannot reliably be distinguished with this method. GPU selection happens once at startup; restart if the compositor's preferred device changes. Preview and headless export retain their original policy. Matching the compositor reduces the likelihood of cross-GPU copies, but does not guarantee zero-copy presentation or optimal performance on every driver or secondary output.
+
 ## Shared output rendering
 
 Live outputs with matching physical buffer dimensions and surface texture format share one renderer. Groups with two or more outputs render to a same-format GPU texture, then copy to each swapchain if COPY_DST is supported, otherwise use an unfiltered texel-load blit. A ready surface can reuse a group frame less than one requested frame interval old, without waiting for other surfaces' frame callbacks. Independent refresh schedules can therefore introduce a small difference in animation timing compared with the original independent renderers. Single-output groups render straight to the swapchain. Preview and offline export do not share frames.
