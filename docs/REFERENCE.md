@@ -161,7 +161,7 @@ The `scenes/crystallized.toml` example layers custom shaders on top of existing 
 | Shader | Parameters |
 |---|---|
 | `material_stone.wgsl` | intensity = contrast (0..1), spacing = coarse grain size (pixels), rotation = light direction (degrees), color = reflected light tint, offset = light-center offset (pixels) |
-| `material_ground.wgsl` | intensity = soil contrast (0..1), spacing = coarse texture scale (pixels), rotation = wind direction (degrees), color = dust tint; luminance mask preserves dark weapons |
+| `material_ground.wgsl` | intensity = soil contrast (0..1), spacing = coarse texture scale (pixels), rotation = wind direction (degrees), color = dust tint; luminance mask separates soil from subtle weathered metal shading |
 | `material_crystal.wgsl` | intensity = optical shading strength (0..1), spacing = optical variation scale (pixels), rotation = light direction (degrees), color = reflected light tint; preserves facet colors and alpha |
 | `material_contact_shadow.wgsl` | intensity = shadow amount (0..1), spacing = sample radius (pixels), rotation = direction (degrees); darkens the inside of alpha-mask edges, not other layers |
 | `material_atmosphere.wgsl` | intensity = haze opacity (0..1), spacing = cloud scale (pixels), color = tint, period = drift cycle (seconds) |
