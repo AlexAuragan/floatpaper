@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use crate::audio::{self, Response};
 use bytemuck::{Pod, Zeroable};
 use serde::Deserialize;
 use std::{
@@ -69,6 +70,41 @@ pub struct Scene {
     #[serde(default)]
     pub anchors: BTreeMap<String, Anchor>,
     #[serde(default)] pub text_sources: BTreeMap<String, TextSource>,
+    #[serde(default)] pub audio: AudioConfig,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AudioConfig { pub enabled: bool, pub sensitivity: f32 }
+impl Default for AudioConfig {
+    fn default() -> Self { Self { enabled: false, sensitivity: 1.0 } }
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeAudio {
+    #[serde(default)] pub signal: audio::Signal,
+    #[serde(default = "audio_attack")] pub attack: f32,
+    #[serde(default = "audio_decay")] pub decay: f32,
+    #[serde(default)] pub size: f32,
+    #[serde(default)] pub position: [f32;2],
+    #[serde(default)] pub spin: f64,
+    #[serde(default)] pub color: Option<String>,
+    #[serde(default)] pub opacity: f32,
+}
+fn audio_attack() -> f32 { 0.01 }
+fn audio_decay() -> f32 { 0.15 }
+impl ShapeAudio {
+    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay } }
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectAudio {
+    #[serde(default)] pub signal: audio::Signal,
+    #[serde(default = "audio_attack")] pub attack: f32,
+    #[serde(default = "audio_decay")] pub decay: f32,
+    #[serde(default)] pub intensity: f32,
+}
+impl EffectAudio {
+    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay } }
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -231,6 +267,7 @@ pub struct Shape {
     #[serde(default = "line_height_default")] pub line_height: f32,
     #[serde(default = "raster_size_default")] pub raster_size: u32,
     #[serde(default)] pub preserve_color: bool,
+    #[serde(default)] pub audio: Option<ShapeAudio>,
 }
 fn font_size_default() -> f32 { 64.0 }
 fn line_height_default() -> f32 { 1.2 }
@@ -255,6 +292,7 @@ pub struct Effect {
     pub spacing: f32,
     #[serde(default = "effect_color_default")]
     pub color: String,
+    #[serde(default)] pub audio: Option<EffectAudio>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -291,6 +329,15 @@ impl Scene {
         Ok(scene)
     }
     pub fn has_commands(&self) -> bool { self.text_sources.values().any(TextSource::is_command) }
+    pub fn audio_responses(&self) -> Vec<Response> {
+        let mut responses: Vec<_> = self.layers.iter().flat_map(|l| &l.shapes)
+            .filter_map(|s| s.audio.as_ref().map(ShapeAudio::response))
+            .chain(self.effects.iter().chain(self.layers.iter().flat_map(|l| &l.effects))
+                .filter_map(|e| e.audio.as_ref().map(EffectAudio::response))).collect();
+        responses.sort_by_key(|r| (r.signal,r.attack.to_bits(),r.decay.to_bits()));
+        responses.dedup_by_key(|r| (r.signal,r.attack.to_bits(),r.decay.to_bits()));
+        responses
+    }
     pub fn shape_count(&self) -> usize {
         self.layers
             .iter()
@@ -299,6 +346,7 @@ impl Scene {
             .sum()
     }
     pub fn validate(&self, base: &Path) -> Result<()> {
+        if !(0.25..=4.0).contains(&self.audio.sensitivity) { bail!("Audio sensitivity must be 0.25..=4"); }
         if !(1..=240).contains(&self.fps) {
             bail!("fps must be 1..=240");
         }
@@ -341,6 +389,11 @@ impl Scene {
             validate_effects(&layer.effects, base)?;
             for shape in &layer.shapes {
                 parse_color(&shape.color)?;
+                if let Some(a) = &shape.audio {
+                    a.response().validate()?;
+                    if !(-0.99..=10.0).contains(&a.size) || !(-1.0..=1.0).contains(&a.opacity) || !(-100.0..=100.0).contains(&a.spin) || !a.position.iter().all(|p| (-1.0..=1.0).contains(p)) { bail!("Invalid shape audio modulation range"); }
+                    if let Some(color) = &a.color { parse_color(color)?; if shape.preserve_color { bail!("Audio color requires a tinted sprite or analytic shape"); } }
+                }
                 match shape.kind {
                     ShapeKind::Svg => {
                         let path = base.join(shape.path.as_ref().context("SVG shape requires path")?);
@@ -435,7 +488,11 @@ impl Scene {
     pub fn instances_for_aspect(&self, t: f64, aspect: f32) -> Vec<LayerInstances> {
         self.instances_for_viewport(t, aspect, 1.0, 1.0)
     }
+    #[cfg(test)]
     pub fn instances_for_viewport(&self, t: f64, width: f32, height: f32, pixel_scale: f32) -> Vec<LayerInstances> {
+        self.instances_with_audio(t,width,height,pixel_scale,&audio::Frame::default())
+    }
+    pub fn instances_with_audio(&self, t: f64, width: f32, height: f32, pixel_scale: f32, audio: &audio::Frame) -> Vec<LayerInstances> {
         assert!(width > 0.0 && height > 0.0 && pixel_scale > 0.0);
         let aspect = width / height;
         let t = self.time(t);
@@ -445,7 +502,23 @@ impl Scene {
             .map(|(li, layer)| {
                 let mut out = LayerInstances::default();
                 for (si, shape) in layer.shapes.iter().enumerate() {
-                    let color = parse_color(&shape.color).expect("validated color");
+                    let mut color = parse_color(&shape.color).expect("validated color");
+                    let modulation = shape.audio.as_ref().map_or(audio::Modulation::default(), |a| audio.get(a.response()));
+                    let mut audio_size = 1.0;
+                    let mut audio_opacity = shape.opacity;
+                    let mut audio_spin = 0.;
+                    let mut audio_position = [0.;2];
+                    if let Some(a) = &shape.audio {
+                        let v = modulation.value;
+                        audio_size += a.size*v;
+                        audio_opacity = (shape.opacity+a.opacity*v).clamp(0.,1.);
+                        audio_spin = (a.spin*modulation.integral).rem_euclid(1.);
+                        audio_position = [a.position[0]*v,a.position[1]*v];
+                        if let Some(target) = &a.color {
+                            let target = parse_color(target).expect("validated audio color");
+                            for k in 0..4 { color[k] += (target[k]-color[k])*v; }
+                        }
+                    }
                     let origin = shape.origin.unwrap_or_default();
                     let attachment = shape.attachment.unwrap_or(origin).point();
                     let size = match shape.size_unit { Unit::Relative => shape.size, Unit::Px => [shape.size[0]*pixel_scale/height, shape.size[1]*pixel_scale/height] };
@@ -512,7 +585,10 @@ impl Scene {
                         let jitter = 1.0 + shape.size_jitter * (2.0 * r(6) - 1.0) as f32;
                         let scale = jitter.max(0.01)
                             * (1.0 - shape.pulse * 0.5 + shape.pulse * 0.5 * a.sin() as f32);
-                        let alpha = color[3] * shape.opacity * motion_alpha;
+                        let alpha = color[3] * audio_opacity * motion_alpha;
+                        // Smooth deterministic displacement along an instance-specific direction.
+                        x += audio_position[0] * (2.0*r(9)-1.0) as f32;
+                        y += audio_position[1] * (2.0*r(10)-1.0) as f32;
                         let angle_offset = if shape.count > 1 {
                             match shape.rotation_jitter {
                                 Some(jitter) => jitter * (2.0 * r(7) - 1.0) / 360.0,
@@ -524,7 +600,7 @@ impl Scene {
                         };
                         let angle = (shape.rotation / 360.0
                             + cyclic_rate(shape.spin, self.loop_seconds) * t
-                            + angle_offset)
+                            + angle_offset + audio_spin)
                             * TAU + if shape.align_to_motion { motion_angle } else { 0.0 };
                         let (kind, sides) = match shape.kind {
                             ShapeKind::Circle => (0., 3.),
@@ -535,8 +611,8 @@ impl Scene {
                             // Shape index identifies the immutable texture within this layer.
                             ShapeKind::Svg | ShapeKind::Text => (3., si as f32),
                         };
-                        let sx = size[0] * scale;
-                        let sy = size[1] * scale;
+                        let sx = size[0] * scale * audio_size;
+                        let sy = size[1] * scale * audio_size;
                         let dx = (0.5 - attachment[0]) * sx;
                         let dy = (0.5 - attachment[1]) * sy;
                         // Rotate around the selected attachment, not the quad center.
@@ -584,9 +660,10 @@ pub fn cyclic_rate(rate: f64, duration: Option<f64>) -> f64 {
         _ => rate,
     }
 }
-pub fn effect_values(e: &Effect, t: f64, duration: Option<f64>) -> (f32, f32) {
+pub fn effect_values(e: &Effect, t: f64, duration: Option<f64>, audio: &audio::Frame) -> (f32, f32) {
     let phase = (t * cyclic_rate(1.0 / e.period, duration)).rem_euclid(1.0);
     let strength = e.intensity * (1.0 - e.pulse * 0.5 + e.pulse * 0.5 * (phase * TAU).sin() as f32);
+    let strength = e.audio.as_ref().map_or(strength, |a| (strength+a.intensity*audio.get(a.response()).value).clamp(0.,100.));
     (strength, phase as f32)
 }
 fn random(mut x: u64) -> f64 {
@@ -615,6 +692,7 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
         if !e.intensity.is_finite() || !(0.0..=100.0).contains(&e.intensity) {
             bail!("Effect intensity must be in [0,100]");
         }
+        if let Some(a) = &e.audio { a.response().validate()?; if !(-100.0..=100.0).contains(&a.intensity) { bail!("Audio effect intensity must be -100..=100"); } }
         positive(e.period, "effect.period")?;
         unit(e.pulse, "effect.pulse")?;
         match (&e.kind, &e.shader) {
