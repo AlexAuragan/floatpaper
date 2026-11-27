@@ -161,10 +161,11 @@ The `scenes/crystallized_material.toml` example layers custom shaders on top of 
 | Shader | Parameters |
 |---|---|
 | `material_stone.wgsl` | intensity = contrast (0..1), spacing = coarse grain size (pixels), rotation = light direction (degrees), color = reflected light tint, offset = light-center offset (pixels) |
+| `material_crystal.wgsl` | intensity = optical shading strength (0..1), spacing = optical variation scale (pixels), rotation = light direction (degrees), color = reflected light tint; preserves facet colors and alpha |
 | `material_contact_shadow.wgsl` | intensity = shadow amount (0..1), spacing = sample radius (pixels), rotation = direction (degrees); darkens the inside of alpha-mask edges, not other layers |
 | `material_atmosphere.wgsl` | intensity = haze opacity (0..1), spacing = cloud scale (pixels), color = tint, period = drift cycle (seconds) |
 
-Stone and edge-occlusion shaders preserve alpha. They operate in screen space, rather than object-local coordinates, and are best suited to static layers. The existing renderer conservatively treats custom effects as dynamic, even when they do not use time. The experimental scene therefore incurs additional full-resolution effect passes; profile before adopting it as a default wallpaper.
+Stone, crystal and edge-occlusion shaders preserve alpha. They operate in screen space, rather than object-local coordinates, and are best suited to static layers. The existing renderer conservatively treats custom effects as dynamic, even when they do not use time. The experimental scene therefore incurs additional full-resolution effect passes; profile before adopting it as a default wallpaper.
 
 ## Audio reactivity
 
