@@ -1,4 +1,5 @@
-# Audio modulation demo; run with --allow-audio while music is playing.
+# Direct audio energy demo; run with --allow-audio while music is playing.
+# No onset or kick detection is used by this scene.
 fps = 30
 loop_seconds = 60
 background = "#0d1216"
@@ -25,7 +26,7 @@ attack = 0.015
 decay = 0.15
 
 [[layers]]
-name = "kick ring"
+name = "bass ring"
 [[layers.shapes]]
 kind = "circle"
 center = [0.5, 0.5]
@@ -34,12 +35,12 @@ outline = 0.01
 color = "#526d81"
 opacity = 0.7
 [layers.shapes.audio]
-signal = "kick_strength"
+signal = "bass"
 size = 0.25
 color = "#e8faff"
 opacity = 0.3
 attack = 0.005
-decay = 0.12
+decay = 0.08
 
 [[layers]]
 name = "rotating polygon"
@@ -47,10 +48,10 @@ name = "rotating polygon"
 kind = "glitch"
 intensity = 0.0
 [layers.effects.audio]
-signal = "onset_strength"
+signal = "volume"
 intensity = 0.18
 attack = 0.005
-decay = 0.10
+decay = 0.08
 [[layers.shapes]]
 kind = "polygon"
 sides = 3
@@ -59,17 +60,17 @@ outline = 0.025
 spin = 0.025
 color = "#b7dce8"
 [layers.shapes.audio]
-signal = "onset"
+signal = "mid"
 spin = 0.15
 position = [0.005, 0.005]
 attack = 0.005
-decay = 0.1
+decay = 0.08
 
 [[layers]]
 name = "signal legend"
 [[layers.shapes]]
 kind = "text"
-text = "AUDIO // REACTIVE\nBASS / KICK / ONSET"
+text = "AUDIO // REACTIVE\nBASS / MID / VOLUME"
 origin = "top_left"
 position = [30, 30]
 position_unit = "px"
