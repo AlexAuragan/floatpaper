@@ -4,6 +4,10 @@ loop_seconds = 60.0
 seed = 42
 background = "#07121c"
 
+# Move this point to reposition the ship, rings and flight streaks.
+[anchors.ship]
+center = [0.69, 0.63]
+
 [[layers]]
 name = "distant star halos"
 
@@ -33,7 +37,42 @@ pulse = 0.3
 
 [[layers]]
 name = "flight streaks"
-effects = [{ kind = "custom", shader = "assets/flight_rays.wgsl", intensity = 0.85, period = 3.0 }]
+[[layers.shapes]]
+kind = "ray"
+anchor = "ship"
+count = 85
+motion = "radial"
+direction = "inward"
+heading = 215.0
+angle_spread = 155.0
+radius = [0.22, 2.15]
+period = 3.0
+align_to_motion = true
+size = [0.20, 0.008]
+size_jitter = 0.65
+fade = 1.0
+glow = 0.85
+recycle_fade = 0.18
+color = "#a8d9ef"
+opacity = 0.46
+
+[[layers.shapes]]
+kind = "ray"
+anchor = "ship"
+count = 24
+motion = "radial"
+direction = "inward"
+heading = 0.0
+angle_spread = 360.0
+radius = [0.24, 1.8]
+period = 4.0
+align_to_motion = true
+size = [0.12, 0.005]
+size_jitter = 0.6
+fade = 1.0
+glow = 0.7
+color = "#71b0ce"
+opacity = 0.24
 
 [[layers]]
 name = "orbital bloom"
@@ -41,7 +80,7 @@ effects = [{ kind = "blur", intensity = 5.5 }]
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.23,0.23]
 outline = 0.045
 color = "#479bc5"
@@ -49,7 +88,7 @@ opacity = 0.384
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.49,0.49]
 outline = 0.0125
 color = "#479bc5"
@@ -57,7 +96,7 @@ opacity = 0.2592
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.91,0.91]
 outline = 0.00875
 color = "#479bc5"
@@ -65,7 +104,7 @@ opacity = 0.24
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.69,0.63]
+anchor = "ship"
 size = [1.28,1.28]
 outline = 0.0125
 color = "#479bc5"
@@ -73,7 +112,8 @@ opacity = 0.2208
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.31,0.04]
+anchor = "ship"
+anchor_offset = [-0.38, -0.59]
 size = [1.48,1.48]
 outline = 0.01
 color = "#479bc5"
@@ -81,7 +121,8 @@ opacity = 0.312
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.93,0.88]
+anchor = "ship"
+anchor_offset = [0.24, 0.25]
 size = [1.13,1.13]
 outline = 0.015
 color = "#479bc5"
@@ -89,7 +130,8 @@ opacity = 0.34559999999999996
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.53,0.53]
+anchor = "ship"
+anchor_offset = [-0.16, -0.10]
 size = [1.1,0.56]
 rotation = -35.0
 outline = 0.01
@@ -99,7 +141,7 @@ opacity = 0.17759999999999998
 [[layers.shapes]]
 kind = "svg"
 path = "assets/ship.svg"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.3,0.3]
 rotation = 125.0
 color = "#67d3ff"
@@ -112,7 +154,7 @@ name = "spacecraft"
 [[layers.shapes]]
 kind = "svg"
 path = "assets/ship.svg"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.3,0.3]
 rotation = 125.0
 color = "#d5e9ec"
@@ -124,7 +166,7 @@ name = "crossing navigation tracks"
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.23,0.23]
 outline = 0.018
 color = "#e1f5ff"
@@ -132,7 +174,7 @@ opacity = 0.8
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.49,0.49]
 outline = 0.005
 color = "#c9eaf7"
@@ -140,7 +182,7 @@ opacity = 0.54
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.91,0.91]
 outline = 0.0035
 color = "#a0ccde"
@@ -148,7 +190,7 @@ opacity = 0.5
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.69,0.63]
+anchor = "ship"
 size = [1.28,1.28]
 outline = 0.005
 color = "#72b8d8"
@@ -156,7 +198,8 @@ opacity = 0.46
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.31,0.04]
+anchor = "ship"
+anchor_offset = [-0.38, -0.59]
 size = [1.48,1.48]
 outline = 0.004
 color = "#e4f7ff"
@@ -164,7 +207,8 @@ opacity = 0.65
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.93,0.88]
+anchor = "ship"
+anchor_offset = [0.24, 0.25]
 size = [1.13,1.13]
 outline = 0.006
 color = "#d6f2ff"
@@ -172,7 +216,8 @@ opacity = 0.72
 
 [[layers.shapes]]
 kind = "circle"
-center = [0.53,0.53]
+anchor = "ship"
+anchor_offset = [-0.16, -0.10]
 size = [1.1,0.56]
 rotation = -35.0
 outline = 0.004
@@ -182,7 +227,7 @@ opacity = 0.37
 [[layers.shapes]]
 kind = "svg"
 path = "assets/orbit_marker.svg"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.53607,0.53607]
 spin = 0.05
 rotation = 35.0
@@ -193,7 +238,7 @@ raster_size = 768
 [[layers.shapes]]
 kind = "svg"
 path = "assets/orbit_marker.svg"
-center = [0.69,0.63]
+anchor = "ship"
 size = [0.99556,0.99556]
 spin = -0.033333333333
 rotation = 150.0
@@ -204,7 +249,8 @@ raster_size = 768
 [[layers.shapes]]
 kind = "svg"
 path = "assets/orbit_marker.svg"
-center = [0.31,0.04]
+anchor = "ship"
+anchor_offset = [-0.38, -0.59]
 size = [1.61915,1.61915]
 spin = 0.033333333333
 rotation = 190.0
