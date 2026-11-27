@@ -88,7 +88,7 @@ struct Uniform {
 }
 
 struct Target {
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     bind: wgpu::BindGroup,
 }
@@ -108,7 +108,10 @@ impl Target {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: INTERNAL,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
@@ -135,7 +138,7 @@ impl Target {
             ],
         });
         Self {
-            _texture: texture,
+            texture,
             view,
             bind,
         }
@@ -150,15 +153,98 @@ struct StaticLayerCache {
     valid: bool,
 }
 
-fn layer_is_static(layer: &scene::Layer) -> bool {
+fn geometry_is_static(layer: &scene::Layer) -> bool {
     layer.shapes.iter().all(|shape| {
         matches!(shape.motion, scene::Motion::Static)
             && shape.spin == 0.0
             && shape.pulse == 0.0
-    }) && layer.effects.iter().all(|effect| {
-        effect.pulse == 0.0
-            && matches!(effect.kind, EffectKind::Grid | EffectKind::Blur | EffectKind::Crt)
     })
+}
+
+fn effect_is_static(effect: &Effect) -> bool {
+    effect.pulse == 0.0
+        && matches!(effect.kind, EffectKind::Grid | EffectKind::Blur | EffectKind::Crt)
+}
+
+fn layer_is_static(layer: &scene::Layer) -> bool {
+    geometry_is_static(layer) && layer.effects.iter().all(effect_is_static)
+}
+
+fn effect_pass_count(effect: &Effect) -> usize {
+    if effect.kind == EffectKind::Blur && effect.rotation.is_none() {
+        2
+    } else {
+        1
+    }
+}
+
+// Keep the existing combined cache budget, not a per-texture budget.
+const CACHE_BUDGET: u64 = 64 * 1024 * 1024;
+
+fn cache_fits(width: u32, height: u32, textures: u64) -> bool {
+    u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(8 * textures))
+        .is_some_and(|bytes| bytes <= CACHE_BUDGET)
+}
+
+fn static_prefix(scene: &Scene) -> Option<(usize, usize)> {
+    let mut best = None;
+    let mut best_score = 0;
+    for (index, layer) in scene.layers.iter().enumerate() {
+        if !geometry_is_static(layer) {
+            continue;
+        }
+        // Stop at the first dynamic effect; a later static effect still
+        // depends on the changing input produced by that effect.
+        let count = layer.effects.iter().take_while(|e| effect_is_static(e)).count();
+        if count == 0 || count == layer.effects.len() {
+            continue;
+        }
+        let score = 1 + layer.effects[..count].iter().map(effect_pass_count).sum::<usize>();
+        if score > best_score {
+            best = Some((index, count));
+            best_score = score;
+        }
+    }
+    best
+}
+
+struct StaticPrefixCache {
+    layer: usize,
+    effects: usize,
+    target: Target,
+    valid: bool,
+}
+
+impl StaticPrefixCache {
+    fn new(
+        gpu: &Gpu,
+        scene: &Scene,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        uniform: &wgpu::Buffer,
+        width: u32,
+        height: u32,
+        has_layer_cache: bool,
+    ) -> Option<Self> {
+        let textures = if has_layer_cache { 2 } else { 1 };
+        if std::env::var_os("FLOATPAPER_DISABLE_CACHE").is_some()
+            || std::env::var_os("FLOATPAPER_DISABLE_PREFIX_CACHE").is_some()
+            || !cache_fits(width, height, textures)
+        {
+            return None;
+        }
+        let (layer, effects) = static_prefix(scene)?;
+        eprintln!("Static effect prefix cache: layer {} ({}) first {} effects ({}x{})",
+            layer, scene.layers[layer].name, effects, width, height);
+        Some(Self {
+            layer,
+            effects,
+            target: Target::new(gpu, layout, sampler, uniform, width, height),
+            valid: false,
+        })
+    }
 }
 
 fn static_run(scene: &Scene) -> Option<Range<usize>> {
@@ -173,13 +259,7 @@ fn static_run(scene: &Scene) -> Option<Range<usize>> {
             continue;
         }
         // Count geometry, compositing and full-screen effect passes.
-        score += 2 + layer.effects.iter().map(|effect| {
-            if effect.kind == EffectKind::Blur && effect.rotation.is_none() {
-                2
-            } else {
-                1
-            }
-        }).sum::<usize>();
+        score += 2 + layer.effects.iter().map(effect_pass_count).sum::<usize>();
         // A single unfiltered layer is not worth a full-size cached texture.
         if score > 2 && score > best_score {
             best = Some(start..i + 1);
@@ -202,7 +282,7 @@ impl StaticLayerCache {
         // Opt-out for visual/performance comparisons; cap extra allocation at
         // 64 MiB per output (RGBA16Float = 8 bytes per pixel).
         if std::env::var_os("FLOATPAPER_DISABLE_CACHE").is_some()
-            || u64::from(width) * u64::from(height) * 8 > 64 * 1024 * 1024
+            || !cache_fits(width, height, 1)
         {
             return None;
         }
@@ -403,6 +483,7 @@ pub struct Renderer {
     stride: usize,
     targets: [Target; 4], // 0,1 layer ping-pong; 2,3 scene ping-pong
     static_cache: Option<StaticLayerCache>,
+    prefix_cache: Option<StaticPrefixCache>,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     geometry_uniform: wgpu::Buffer,
@@ -575,6 +656,9 @@ impl Renderer {
                 mapped_at_creation: false,
             });
             let static_cache = StaticLayerCache::new(gpu, &scene, &layout, &sampler, &uniform, width, height);
+            let prefix_cache = StaticPrefixCache::new(
+                gpu, &scene, &layout, &sampler, &uniform, width, height, static_cache.is_some(),
+            );
             Ok(Self {
                 scene,
                 width,
@@ -589,6 +673,7 @@ impl Renderer {
                 stride,
                 targets,
                 static_cache,
+                prefix_cache,
                 layout,
                 sampler,
                 geometry_uniform,
@@ -622,8 +707,15 @@ impl Renderer {
                 height,
             )
         });
+        // Release old caches before allocating their replacements.
+        self.static_cache = None;
+        self.prefix_cache = None;
         self.static_cache = StaticLayerCache::new(
             gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height,
+        );
+        self.prefix_cache = StaticPrefixCache::new(
+            gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height,
+            self.static_cache.is_some(),
         );
         gpu.queue.write_buffer(
             &self.geometry_uniform,
@@ -713,7 +805,8 @@ impl Renderer {
                     }
                     None => &self.targets[2].view,
                 };
-                {
+                let prefix = self.prefix_cache.as_ref().filter(|cache| cache.layer == i);
+                if prefix.map_or(true, |cache| !cache.valid) {
                     let mut pass = passes.begin(
                         &self.targets[0].view,
                         wgpu::LoadOp::Clear(layer.clear),
@@ -733,18 +826,57 @@ impl Renderer {
                         pass.draw(0..6, cutout.clone());
                     }
                 }
-                let current = passes.chain(
-                    &self.targets,
-                    0,
-                    1,
-                    &layer.effects,
-                    t,
-                    self.scene.loop_seconds,
-                );
+                let current = if let Some(cache) = prefix {
+                    if !cache.valid {
+                        let input = passes.chain(
+                            &self.targets[0],
+                            &self.targets[0],
+                            &self.targets[1],
+                            &layer.effects[..cache.effects],
+                            t,
+                            self.scene.loop_seconds,
+                        );
+                        // Exact GPU-side copy: no blending, filtering or CPU readback.
+                        passes.encoder.copy_texture_to_texture(
+                            wgpu::ImageCopyTexture {
+                                texture: &input.texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::ImageCopyTexture {
+                                texture: &cache.target.texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            extent(self.width, self.height),
+                        );
+                    }
+                    // Sample the immutable cached prefix directly. Only the
+                    // remaining effects write to the two scratch textures.
+                    passes.chain(
+                        &cache.target,
+                        &self.targets[0],
+                        &self.targets[1],
+                        &layer.effects[cache.effects..],
+                        t,
+                        self.scene.loop_seconds,
+                    )
+                } else {
+                    passes.chain(
+                        &self.targets[0],
+                        &self.targets[0],
+                        &self.targets[1],
+                        &layer.effects,
+                        t,
+                        self.scene.loop_seconds,
+                    )
+                };
                 passes.draw(
                     "composite",
                     &self.composite,
-                    &self.targets[current],
+                    current,
                     destination,
                     wgpu::LoadOp::Load,
                     self.scene.layers[i].opacity,
@@ -777,10 +909,13 @@ impl Renderer {
         if let Some(cache) = &mut self.static_cache {
             cache.valid = true;
         }
+        if let Some(cache) = &mut self.prefix_cache {
+            cache.valid = true;
+        }
         let current = passes.chain(
-            &self.targets,
-            2,
-            3,
+            &self.targets[2],
+            &self.targets[2],
+            &self.targets[3],
             &self.global,
             t,
             self.scene.loop_seconds,
@@ -788,7 +923,7 @@ impl Renderer {
         passes.draw(
             "present",
             &self.present,
-            &self.targets[current],
+            current,
             output,
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
             if self.output_format.is_srgb() {
@@ -882,16 +1017,16 @@ impl Passes<'_> {
         pass.draw(0..3, 0..1);
     }
 
-    fn chain(
+    fn chain<'b>(
         &mut self,
-        targets: &[Target; 4],
-        a: usize,
-        b: usize,
+        input: &'b Target,
+        a: &'b Target,
+        b: &'b Target,
         effects: &[EffectPipeline],
         t: f64,
         duration: Option<f64>,
-    ) -> usize {
-        let mut current = a;
+    ) -> &'b Target {
+        let mut current = input;
 
         for effect in effects {
             let (strength, phase) = scene::effect_values(&effect.config, t, duration);
@@ -903,22 +1038,17 @@ impl Passes<'_> {
 
             let rotations = [rotation, rotation + 90.0];
 
-            let pass_count =
-                if effect.config.kind == EffectKind::Blur && effect.config.rotation.is_none() {
-                    2
-                } else {
-                    1
-                };
+            let pass_count = effect_pass_count(&effect.config);
 
             for pipeline in &effect.passes {
                 for &angle in &rotations[..pass_count] {
-                    let next = if current == a { b } else { a };
+                    let next = if std::ptr::eq(current, a) { b } else { a };
 
                     self.draw(
                         effect_label(effect.config.kind),
                         pipeline,
-                        &targets[current],
-                        &targets[next].view,
+                        current,
+                        &next.view,
                         wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         strength,
                         phase,
@@ -1132,4 +1262,35 @@ effects = [{kind = "crt"}]
         assert!(!layer_is_static(&s.layers[4]));
         assert_eq!(static_run(&s), None);
     }
+
+    #[test]
+    fn prefix_stops_at_first_dynamic_effect_and_skips_animated_geometry() {
+        let mut s = sample_scene();
+        let mut grid = s.layers[1].effects[0].clone();
+        let blur = s.layers[2].effects[0].clone();
+        let glitch = s.layers[3].effects[0].clone();
+        s.layers[3].effects = vec![grid.clone(), blur.clone(), glitch.clone(), grid.clone()];
+        s.layers[0].effects = s.layers[3].effects.clone();
+        assert_eq!(static_prefix(&s), Some((3, 2)));
+        s.layers[3].effects[0].pulse = 0.2;
+        assert_eq!(static_prefix(&s), None);
+        grid.kind = EffectKind::Custom;
+        s.layers[3].effects = vec![grid, blur, glitch];
+        assert_eq!(static_prefix(&s), None);
+    }
+
+    #[test]
+    fn prefix_selects_most_expensive_run_and_respects_cache_budget() {
+        let mut s = sample_scene();
+        let grid = s.layers[1].effects[0].clone();
+        let blur = s.layers[2].effects[0].clone();
+        let glitch = s.layers[3].effects[0].clone();
+        s.layers[1].effects = vec![grid, glitch.clone()];
+        s.layers[2].effects = vec![blur, glitch];
+        assert_eq!(static_prefix(&s), Some((2, 1)));
+        assert!(cache_fits(1440, 2560, 2));
+        assert!(cache_fits(3840, 2160, 1));
+        assert!(!cache_fits(3840, 2160, 2));
+    }
+
 }
