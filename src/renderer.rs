@@ -992,7 +992,7 @@ impl Renderer {
             profiler.prepare(gpu);
         }
         let t = self.scene.time(t);
-        let layer_instances = self.scene.instances(t);
+        let layer_instances = self.scene.instances_for_aspect(t, self.width as f32 / self.height as f32);
         // Pack both instance groups into one buffer, recording each layer's draw ranges.
         let mut flat = Vec::new();
         let ranges: Vec<_> = layer_instances
