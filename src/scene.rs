@@ -228,7 +228,7 @@ pub enum EffectKind {
 pub struct Instance {
     pub center_size: [f32; 4],
     pub color: [f32; 4],
-    pub params: [f32; 4], // radians, kind (0 circle / 1 box / 2 polygon), sides, outline
+    pub params: [f32; 4], // radians, kind (0 circle / 1 box / 2 polygon / 3 sprite / 4 ray), kind-specific data
 }
 
 #[derive(Debug, Clone, Default)]
@@ -427,6 +427,7 @@ impl Scene {
                         let angle_offset = if shape.count > 1 {
                             match shape.rotation_jitter {
                                 Some(jitter) => jitter * (2.0 * r(7) - 1.0) / 360.0,
+                                None if shape.align_to_motion => 0.0,
                                 None => r(7), // preserve the original scene behavior
                             }
                         } else {
