@@ -15,7 +15,7 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
     // Prefer the upper-left side of the ship, with a few peripheral rays.
     let direction = p / max(radius, 0.0001);
     let approach = smoothstep(-0.15, 0.80, dot(direction, normalize(vec2(-0.85, -0.60))));
-    let active = step(0.48, random);
+    let lane_enabled = step(0.48, random);
     let distance_px = offset * (6.28318530 / 112.0) * radius * params.resolution.y;
     let core = 1.0 - smoothstep(0.25, 1.65, distance_px);
     let halo = 1.0 - smoothstep(0.5, 5.5, distance_px);
@@ -26,7 +26,7 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
         * (1.0 - smoothstep(0.48 + random2 * 0.20, 0.84, travel));
     let envelope = smoothstep(0.13, 0.28, radius);
     let a = clamp((core * 0.55 + halo * 0.12) * segment * envelope
-        * active * approach * params.strength * (0.35 + random2 * 0.65), 0.0, 1.0);
+        * lane_enabled * approach * params.strength * (0.35 + random2 * 0.65), 0.0, 1.0);
     let rgb = mix(vec3(0.11, 0.37, 0.55), vec3(0.60, 0.84, 0.95), core);
     return vec4(rgb * a, a);
 }
