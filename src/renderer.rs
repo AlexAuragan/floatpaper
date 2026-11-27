@@ -1193,7 +1193,7 @@ impl Renderer {
                         phase,
                         last.config.offset,
                         last.config.rotation.unwrap_or(0.0),
-                        last.config.spacing,
+                        last.config.effective_spacing(),
                         scene::parse_color(&last.config.color).expect("validated effect color"),
                         scissor,
                     );
@@ -1258,7 +1258,7 @@ impl Renderer {
                 phase,
                 last.config.offset,
                 last.config.rotation.unwrap_or(0.0),
-                last.config.spacing,
+                last.config.effective_spacing(),
                 scene::parse_color(&last.config.color).expect("validated effect color"),
             );
         } else {
@@ -1428,7 +1428,7 @@ impl Passes<'_> {
                         phase,
                         effect.config.offset,
                         angle,
-                        effect.config.spacing,
+                        effect.config.effective_spacing(),
                         effect_color,
                     );
 
