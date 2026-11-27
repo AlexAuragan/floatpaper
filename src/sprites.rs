@@ -139,6 +139,21 @@ pub fn rasterize(shape: &Shape, base: &Path, fonts: &mut Option<FontSystem>) -> 
     }
 }
 
+pub fn fit_canvas(raster: Raster, width: u32, height: u32) -> Result<Raster> {
+    if raster.width > width || raster.height > height {
+        bail!("Text raster {}x{} exceeds fixed canvas {width}x{height}", raster.width, raster.height);
+    }
+    if raster.width == width && raster.height == height { return Ok(raster); }
+    let mut canvas = Raster::blank(width, height)?;
+    for y in 0..raster.height as usize {
+        let from = y * raster.width as usize * 4;
+        let to = y * width as usize * 4;
+        let len = raster.width as usize * 4;
+        canvas.rgba[to..to+len].copy_from_slice(&raster.rgba[from..from+len]);
+    }
+    Ok(canvas)
+}
+
 // Use one common canvas per sequence, so a short or blank frame never
 // stretches to fill the shape or shifts its neighbors.
 pub fn sequence_rasters(shape: &Shape, frames: &[&str], base: &Path, fonts: &mut Option<FontSystem>) -> Result<Vec<Raster>> {
