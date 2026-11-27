@@ -1,4 +1,4 @@
-# Direct audio energy demo; run with --allow-audio while music is playing.
+# Direct audio energy demo; run with while music is playing.
 # No onset or kick detection is used by this scene.
 fps = 30
 loop_seconds = 60

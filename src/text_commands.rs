@@ -24,7 +24,7 @@ impl Commands {
         let mut this = Self { active: Arc::new(AtomicBool::new(false)), stop: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)), values: Arc::new(Mutex::new(BTreeMap::new())), workers: Vec::new() };
         if !allowed {
-            if scene.has_commands() { eprintln!("Command text disabled: using defaults. Pass --allow-commands only for trusted scenes."); }
+            if scene.has_commands() { eprintln!("Command text disabled: using defaults. Run floatpaper trust <scene> for trusted scenes, then restart or reload."); }
             return Ok(this);
         }
         for (name, source) in &scene.text_sources {
