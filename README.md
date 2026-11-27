@@ -2,7 +2,7 @@
 
 A lightweight, programmable animated wallpaper engine for Wayland (Hyprland), written in Rust and WGSL.
 
-Build layered scenes from TOML: geometric shapes, SVGs, animated text, live system information and custom shaders. Run them directly on your desktop or export seamless MP4 loops.
+Build layered scenes from TOML: geometric shapes, SVGs, animated text, live system information, audio-reactive visuals and custom shaders. Run them directly on your desktop or export seamless MP4 loops.
 
 ## Install (Arch Linux)
 
@@ -36,6 +36,7 @@ Edit the scene while running to hot-reload it. Use `floatpaper pause`, `resume`,
 | [cutout](scenes/cutout.toml) | Cutouts, grids and glitch |
 | [spaceship_loading](scenes/spaceship_loading.toml) | SVG, rays, anchors and HUD |
 | [spaceship_telemetry](scenes/spaceship_telemetry.toml) | Responsive HUD, text sequences and live metrics |
+| [audio_reactive](scenes/audio_reactive.toml) | Audio-driven glow, glitch, rotation and spectrum |
 
 For the live telemetry example:
 
@@ -44,6 +45,17 @@ floatpaper live scenes/spaceship_telemetry.toml --allow-commands
 ```
 
 **Only enable commands for trusted scenes.** Commands run with your user permissions, including after hot reload. Without the flag, text sources use their defaults.
+
+## Audio reactivity (optional)
+
+Install `libpulse` for `parec` and use a running PulseAudio-compatible server (such as PipeWire with pipewire-pulse).
+
+```sh
+floatpaper preview scenes/audio_reactive.toml --allow-audio
+floatpaper live scenes/audio_reactive.toml --allow-audio
+```
+
+Playback audio is captured only when explicitly allowed and the scene enables audio. It is processed locally, not recorded to disk. Audio-reactive properties and spectrum bars are described in the reference.
 
 ## Video export (optional)
 
@@ -54,7 +66,7 @@ floatpaper export scenes/pure_black.toml -o wallpaper.mp4
 floatpaper play wallpaper.mp4
 ```
 
-MP4 cannot display real-time command output; export warns and uses defaults.
+MP4 cannot display live command output or audio reactivity; export warns and uses base parameters and text defaults.
 
 ## Documentation
 

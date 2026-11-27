@@ -38,7 +38,7 @@ pulse = 0.15
 
 Layers are painted in file order, back to front. Each shape declaration generates `count` instances with deterministic random offsets, size variation and phases; use separate declarations with `count=1` to control shapes individually. Coordinates use the top-left origin and normalized screen coordinates (x and y each 0..1). Sizes are full bounding-box dimensions relative to viewport **height**, so equal x/y sizes retain their aspect ratio on wide monitors. Motion radii are in normalized screen coordinates. Shapes can drift offscreen. `wrap` moves horizontally, drawing translated edge copies. Colors accept `#RRGGBB` or `#RRGGBBAA`; layer and shape opacity multiply existing alpha. `outline=0` fills the shape; positive values produce a stroke. Shape rotation is in degrees, `spin` in signed turns per second, `phase` in cycles. `pulse` (0..1) modulates size.
 
-Shape types: `circle`, `rectangle`, `triangle`, `polygon` (3–32 `sides`), `ray`, `svg`, `text`. Motion types: `static`, `orbit`, `drift` (combined harmonics), `wrap`, `radial`, `linear`.
+Shape types: `circle`, `rectangle`, `triangle`, `polygon` (3–32 `sides`), `ray`, `svg`, `text`, `spectrum`. Motion types: `static`, `orbit`, `drift` (combined harmonics), `wrap`, `radial`, `linear`.
 
 ### Rays, directional motion and anchors
 
@@ -153,13 +153,97 @@ Paths are relative to the scene TOML file. A custom shader defines `fn effect(uv
 
 During preview or live mode, the scene directory and initially referenced external shader directories are watched. Edits are debounced; a malformed config or shader should be rejected with diagnostics and the previous scene retained. The scene clock keeps running across reloads. Built-in WGSL files are embedded at compile time; copy one into a custom shader if you want to edit it live, or rebuild after editing built-ins. Adding a reference to a new external shader directory requires a restart for that directory to be watched. The watcher may react to unrelated file changes in watched directories; keep exports outside them where practical.
 
+## Audio reactivity
+
+Enable audio per scene and authorize capture at launch:
+
+```toml
+[audio]
+enabled = true
+sensitivity = 1.0
+```
+
+```sh
+floatpaper preview scenes/audio_reactive.toml --allow-audio
+floatpaper audio-test --sensitivity 1.0
+```
+
+Requires `parec` (Arch package `libpulse`) and a running PulseAudio-compatible server. Preview/live capture the default playback monitor, not the default microphone. The diagnostic accepts an optional `--target` source. Sensitivity is 0.25..4 (default 1). Audio is local PCM, not saved to disk. One capture worker serves all outputs. Without permission or on capture failure, reactive values are zero; capture failures are retried. Manual pause, all-hidden suspension and frozen benchmark modes stop capture. MP4 export uses zero audio signals and does not capture sound.
+
+### Shape and effect modulation
+
+```toml
+[[layers]]
+name = "audio ring"
+[[layers.shapes]]
+kind = "circle"
+size = [0.48, 0.48]
+opacity = 0.7
+color = "#526d81"
+[layers.shapes.audio]
+signal = "bass"
+size = 0.4
+opacity = 0.3
+color = "#e8faff"
+attack = 0.005
+decay = 0.08
+```
+
+The response is a normalized value v in [0,1]. Every specified property shares this response; omitted properties remain unchanged.
+
+| Shape audio field | Meaning / range |
+|---|---|
+| size | Multiply base dimensions by 1 + size * v; -0.99..10 |
+| opacity | Add opacity * v, clamp to 0..1; -1..1 |
+| color | Interpolate linear RGBA toward target hex color; unsupported with preserve_color |
+| position | Seeded displacement in normalized screen coordinates, each component -1..1 |
+| spin | Add spin * v turns/sec, integrated continuously; -100..100 |
+
+For effects use `[layers.effects.audio]` or `[effects.audio]` for global effects, with `intensity` (-100..100) added to the base strength and clamped to 0..100; the shader may clamp further.
+
+| Response field | Meaning / default |
+|---|---|
+| signal | bass (<200 Hz), mid (200–2500 Hz), treble (>=2500 Hz), volume, onset, kick, onset_strength, kick_strength; default onset |
+| attack | Rise time constant, seconds; 0..5, default 0.01 |
+| decay | Fall time constant, seconds; 0..10, default 0.15 |
+| logarithmic | Default true; ln(1+9v)/ln(10) |
+| power | 0.1..8, default 1; requires logarithmic=false if nondefault |
+
+Zero attack/decay is immediate. Broad energy signals already have a short internal smoothing stage. Onset and kick are adaptive spectral-change pulses (kick emphasizes frequencies up to 150 Hz), not a beat/tempo tracker. Strength variants multiply pulses by impact amplitude. 
+
+Glitch defaults to `continuous = true`: displacement amplitude follows intensity without the built-in burst gate. Period controls smooth pattern variation. Set `continuous = false` for the original periodic bursts. This changes the appearance of older glitch scenes that omit the flag.
+
+### Spectrum
+
+```toml
+[[layers]]
+name = "spectrum"
+[[layers.shapes]]
+kind = "spectrum"
+bars = 64
+origin = "bottom_center"
+position = [0.0, 0.02]
+size = [1.2, 0.2]
+color = "#71c4e8"
+opacity = 0.2
+gap = 0.25
+attack = 0.005
+decay = 0.08
+```
+
+Spectrum uses the same FFT as audio modulation, with 64 logarithmically spaced bands from 30 Hz to 16 kHz. Fewer bars take the maximum of adjacent band responses. Bars grow upwards within the maximum-size bounding box and vanish in silence. Sizes and attachment follow ordinary shape layout (relative sizes are viewport-height units). Bars default to 64 (1..64), gap to 0.25 (0..0.95), attack to 0.005s, decay to 0.08s, and logarithmic to true. These fields are directly on the spectrum shape, not an audio subtable. The spectrum does not support count other than 1, motion, rotation, spin, pulse, spread, size_jitter or an additional shape audio block. Color, opacity, outline and compositing use the normal rectangle renderer. Adjacent bass bars can share FFT bins due to the roughly 23 Hz frequency resolution. No external CAVA process is needed.
+
+### Audio shader uniforms
+
+Custom WGSL effects can read `params.bass`, `params.mid`, `params.treble`, `params.volume`, `params.onset`, `params.kick`, `params.onset_strength`, and `params.kick_strength`. These are analyzer signals before per-binding response shaping; strength variants are weighted pulses. Spectrum bands are not exposed to WGSL.
+
 ## Seamless looping model
 
 Built-in shape animations and text sequences are pure functions of scene time and deterministic seeds; command sources are live inputs and use defaults for export. For a loop of duration T, an animation with requested rate r is snapped to the nearest nonzero integer number of cycles per T (zero remains zero). Thus rotations, orbital motion, drift, size pulses and built-in effect phases repeat. Very slow motions can be noticeably accelerated in short loops. Horizontal wrapping adds edge copies; extremely wide shapes can overlap their own copies. Custom shaders must obey the same periodicity contract. Export samples `t = frame / fps` for frames 0 through N-1; it does not duplicate the first frame at the end.
 
 ## Static rendering caches
 
-Floatpaper automatically caches one contiguous run of fully static layers and, when useful, one static geometry/effect prefix in a partially animated layer. A prefix ends before the first time-dependent effect; subsequent effects run every frame. Only built-in grid, blur and CRT with no intensity pulse are considered static. Animated geometry, text sources, noise, glitch and custom shaders are excluded conservatively.
+Floatpaper automatically caches one contiguous run of fully static layers and, when useful, one static geometry/effect prefix in a partially animated layer. A prefix ends before the first time-dependent effect; subsequent effects run every frame. Only built-in grid, blur and CRT with no intensity pulse are considered static. Animated geometry, audio-reactive shapes/effects, spectrum shapes, text sources, noise, glitch and custom shaders are excluded conservatively.
 
 The prefix texture is populated once with an exact GPU-side texture copy, then sampled directly by the dynamic suffix. Both caches are rebuilt on resize or scene reload. The combined extra texture storage is limited to 64 MiB per output; if only one cache fits, the existing static layer cache takes priority.
 
@@ -285,6 +369,7 @@ src/renderer.rs wgpu geometry, reusable textures, ordered effect passes
 src/desktop.rs  raw Wayland protocols, output surfaces, frame pacing, reload
 src/export.rs   headless render, RGBA readback, FFmpeg encoding
 src/main.rs     CLI and mpvpaper playback
+src/audio.rs    playback capture, FFT, spectrum and modulation envelopes
 shaders/        WGSL geometry and built-in/custom effects
 scenes/         minimal smoke scene + original Pure Black-inspired demo
 ```
