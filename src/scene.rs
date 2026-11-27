@@ -702,7 +702,9 @@ align_to_motion = true
         let a = s.instances_for_aspect(2.5, 2.0);
         let b = s.instances_for_aspect(5.0, 2.0);
         let ray = a[0].over[0];
-        assert!((ray.center_size[0] - 0.4).abs() < 1e-6);
+        // At quarter cycle the inward radius is 0.1 + 0.8 * 0.75 = 0.7;
+        // viewport aspect 2 converts this to a normalized x offset of 0.35.
+        assert!((ray.center_size[0] - 0.35).abs() < 1e-6);
         assert!((ray.center_size[1] - 0.6).abs() < 1e-6);
         assert!((ray.params[0].cos() - 1.0).abs() < 1e-6);
         assert!(b[0].over[0].center_size[0] > ray.center_size[0]);
