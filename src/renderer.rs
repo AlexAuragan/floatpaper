@@ -464,7 +464,7 @@ impl FrameProfiler {
 struct EffectPipeline {
     config: Effect,
     passes: Vec<wgpu::RenderPipeline>,
-    to_output: bool,
+    terminal: bool,
 }
 struct LayerPipeline {
     effects: Vec<EffectPipeline>,
@@ -642,7 +642,14 @@ impl Renderer {
                 .iter()
                 .map(|l| {
                     Ok(LayerPipeline {
-                        effects: compile_effects(d, &layout, &l.effects, base, None)?,
+                        effects: compile_effects(
+                            d, &layout, &l.effects, base,
+                            if std::env::var_os("FLOATPAPER_DISABLE_LAYER_FUSION").is_some() {
+                                None
+                            } else {
+                                Some(FinalPass::Composite(l.opacity))
+                            },
+                        )?,
                         clear: clear_color(&l.background)?,
                     })
                 })
@@ -650,7 +657,7 @@ impl Renderer {
             let final_output = if std::env::var_os("FLOATPAPER_DISABLE_FINAL_FUSION").is_some() {
                 None
             } else {
-                Some(output_format)
+                Some(FinalPass::Present(output_format))
             };
             let global = compile_effects(d, &layout, &scene.effects, base, final_output)?;
             let background = clear_color(&scene.background)?;
@@ -832,13 +839,17 @@ impl Renderer {
                         pass.draw(0..6, cutout.clone());
                     }
                 }
+                let (effects, terminal) = match layer.effects.split_last() {
+                    Some((last, rest)) if last.terminal => (rest, Some(last)),
+                    _ => (layer.effects.as_slice(), None),
+                };
                 let current = if let Some(cache) = prefix {
                     if !cache.valid {
                         let input = passes.chain(
                             &self.targets[0],
                             &self.targets[0],
                             &self.targets[1],
-                            &layer.effects[..cache.effects],
+                            &effects[..cache.effects],
                             t,
                             self.scene.loop_seconds,
                         );
@@ -865,7 +876,7 @@ impl Renderer {
                         &cache.target,
                         &self.targets[0],
                         &self.targets[1],
-                        &layer.effects[cache.effects..],
+                        &effects[cache.effects..],
                         t,
                         self.scene.loop_seconds,
                     )
@@ -874,24 +885,41 @@ impl Renderer {
                         &self.targets[0],
                         &self.targets[0],
                         &self.targets[1],
-                        &layer.effects,
+                        effects,
                         t,
                         self.scene.loop_seconds,
                     )
                 };
-                passes.draw(
-                    "composite",
-                    &self.composite,
-                    current,
-                    destination,
-                    wgpu::LoadOp::Load,
-                    self.scene.layers[i].opacity,
-                    0.0,
-                    [0.0; 2],
-                    0.0,
-                    48.0,
-                    [0.0, 0.0, 0.0, 1.0],
-                );
+                if let Some(last) = terminal {
+                    let (strength, phase) = scene::effect_values(&last.config, t, self.scene.loop_seconds);
+                    passes.draw(
+                        composite_effect_label(last.config.kind),
+                        &last.passes[0],
+                        current,
+                        destination,
+                        wgpu::LoadOp::Load,
+                        strength,
+                        phase,
+                        last.config.offset,
+                        last.config.rotation.unwrap_or(0.0),
+                        last.config.spacing,
+                        scene::parse_color(&last.config.color).expect("validated effect color"),
+                    );
+                } else {
+                    passes.draw(
+                        "composite",
+                        &self.composite,
+                        current,
+                        destination,
+                        wgpu::LoadOp::Load,
+                        self.scene.layers[i].opacity,
+                        0.0,
+                        [0.0; 2],
+                        0.0,
+                        48.0,
+                        [0.0, 0.0, 0.0, 1.0],
+                    );
+                }
             }
             // Blend the whole cached run exactly once at its original position.
             if let Some(cache) = cached {
@@ -918,7 +946,7 @@ impl Renderer {
         if let Some(cache) = &mut self.prefix_cache {
             cache.valid = true;
         }
-        if let Some((last, prefix)) = self.global.split_last().filter(|(last, _)| last.to_output) {
+        if let Some((last, prefix)) = self.global.split_last().filter(|(last, _)| last.terminal) {
             let current = passes.chain(
                 &self.targets[2],
                 &self.targets[2],
@@ -1148,12 +1176,39 @@ fn fused_effect_body(body: &str, format: wgpu::TextureFormat) -> String {
     )
 }
 
+#[derive(Clone, Copy)]
+enum FinalPass {
+    Present(wgpu::TextureFormat),
+    Composite(f32),
+}
+
+fn composite_effect_label(kind: EffectKind) -> &'static str {
+    match kind {
+        EffectKind::Noise => "noise_composite",
+        EffectKind::Crt => "crt_composite",
+        EffectKind::Glitch => "glitch_composite",
+        EffectKind::Blur => "blur_composite",
+        EffectKind::Grid => "grid_composite",
+        EffectKind::Custom => unreachable!("custom effects are not fused"),
+    }
+}
+
+fn composite_effect_body(body: &str, opacity: f32) -> String {
+    let effect = body.replacen("fn effect(", "fn layer_effect(", 1);
+    // Layer opacity is constant until the scene is reloaded. Keep the
+    // effect's strength uniform independent, and scale all RGBA channels.
+    // Debug formatting emits a valid float literal even for 0 and 1.
+    format!(
+        "{effect}\nfn effect(uv: vec2<f32>) -> vec4<f32> {{\n    return layer_effect(uv) * {opacity:?};\n}}"
+    )
+}
+
 fn compile_effects(
     d: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     effects: &[Effect],
     base: &Path,
-    final_output: Option<wgpu::TextureFormat>,
+    final_output: Option<FinalPass>,
 ) -> Result<Vec<EffectPipeline>> {
     effects
         .iter()
@@ -1192,16 +1247,25 @@ fn compile_effects(
                     )]
                 }
             };
-            if let Some(format) = final_output.filter(|_| {
+            if let Some(final_pass) = final_output.filter(|_| {
                 index + 1 == effects.len() && final_effect_eligible(e) && bodies.len() == 1
             }) {
-                let body = fused_effect_body(&bodies[0].1, format);
-                let label = fused_effect_label(e.kind);
-                eprintln!("Final effect fusion: {label}");
+                let (body, label, format, blend) = match final_pass {
+                    FinalPass::Present(format) => {
+                        let label = fused_effect_label(e.kind);
+                        eprintln!("Final effect fusion: {label}");
+                        (fused_effect_body(&bodies[0].1, format), label, format, None)
+                    }
+                    FinalPass::Composite(opacity) => {
+                        let label = composite_effect_label(e.kind);
+                        eprintln!("Layer effect fusion: {label} (opacity={opacity})");
+                        (composite_effect_body(&bodies[0].1, opacity), label, INTERNAL, Some(BLEND))
+                    }
+                };
                 return Ok(EffectPipeline {
                     config: e.clone(),
-                    passes: vec![effect_pipeline(d, layout, label, &body, format, None)],
-                    to_output: true,
+                    passes: vec![effect_pipeline(d, layout, label, &body, format, blend)],
+                    terminal: true,
                 });
             }
             Ok(EffectPipeline {
@@ -1210,7 +1274,7 @@ fn compile_effects(
                     .iter()
                     .map(|(label, body)| effect_pipeline(d, layout, label, body, INTERNAL, None))
                     .collect(),
-                to_output: false,
+                terminal: false,
             })
         })
         .collect()
@@ -1395,6 +1459,18 @@ effects = [{kind = "crt"}]
         assert_eq!(srgb.matches("fn effect(").count(), 1);
         let linear = fused_effect_body(crt, wgpu::TextureFormat::Bgra8Unorm);
         assert!(linear.contains("return vec4<f32>(linear_to_srgb(c.rgb), 1.0);"));
+    }
+
+    #[test]
+    fn layer_fusion_scales_premultiplied_rgba_without_changing_strength() {
+        let glitch = include_str!("../shaders/glitch.wgsl");
+        for opacity in [0.0_f32, 0.375, 1.0] {
+            let body = composite_effect_body(glitch, opacity);
+            assert!(body.contains("fn layer_effect("));
+            assert!(body.contains("params.strength"));
+            assert!(body.contains(&format!("return layer_effect(uv) * {opacity:?};")));
+            assert_eq!(body.matches("fn effect(").count(), 1);
+        }
     }
 
 }
