@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use bytemuck::{Pod, Zeroable};
 use serde::Deserialize;
 use std::{
+    collections::BTreeMap,
     f64::consts::TAU,
     fs,
     path::{Path, PathBuf},
@@ -65,6 +66,32 @@ pub struct Scene {
     pub effects: Vec<Effect>,
     #[serde(default)]
     pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub anchors: BTreeMap<String, Anchor>,
+    #[serde(default)] pub text_sources: BTreeMap<String, TextSource>,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TextSource {
+    Sequence { frames: Vec<String>, frame_seconds: f64, default: String },
+    Command { command: Vec<String>, interval: f64, timeout: f64, default: String, #[serde(default)] layout: Option<String> },
+}
+impl TextSource {
+    pub fn frames(&self) -> Vec<&str> {
+        match self { Self::Sequence { frames, default, .. } => std::iter::once(default.as_str()).chain(frames.iter().map(String::as_str)).collect(), Self::Command { default, layout, .. } => vec![default.as_str(), layout.as_deref().unwrap_or(default.as_str())] }
+    }
+    pub fn is_command(&self) -> bool { matches!(self, Self::Command { .. }) }
+    // Frame zero is the explicit fallback. The remaining frames are cyclic.
+    pub fn frame(&self, t: f64, duration: Option<f64>, paused: bool) -> usize {
+        if paused { return 0; }
+        match self {
+            Self::Command { .. } => 0,
+            Self::Sequence { frames, frame_seconds, .. } => {
+                let rate = cyclic_rate(1.0 / (*frame_seconds * frames.len() as f64), duration);
+                1 + ((t * rate).rem_euclid(1.0) * frames.len() as f64).floor().min((frames.len()-1) as f64) as usize
+            }
+        }
+    }
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,6 +113,12 @@ pub enum ShapeKind {
     Rectangle,
     Triangle,
     Polygon,
+    Ray,
+    Svg,
+    Text,
+}
+impl ShapeKind {
+    pub fn is_sprite(self) -> bool { matches!(self, Self::Svg | Self::Text) }
 }
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -95,7 +128,35 @@ pub enum Motion {
     Orbit,
     Drift,
     Wrap,
+    Radial,
+    Linear,
 }
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction { #[default] Inward, Outward }
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Anchor {
+    #[serde(default = "center_default")] pub center: [f32; 2],
+}
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unit { #[default] Relative, Px }
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin { TopLeft, TopCenter, TopRight, CenterLeft, #[default] Center, CenterRight, BottomLeft, BottomCenter, BottomRight }
+impl Origin {
+    fn point(self) -> [f32; 2] {
+        match self {
+            Self::TopLeft => [0.,0.], Self::TopCenter => [0.5,0.], Self::TopRight => [1.,0.],
+            Self::CenterLeft => [0.,0.5], Self::Center => [0.5,0.5], Self::CenterRight => [1.,0.5],
+            Self::BottomLeft => [0.,1.], Self::BottomCenter => [0.5,1.], Self::BottomRight => [1.,1.],
+        }
+    }
+}
+fn angle_spread_default() -> f64 { 360.0 }
+fn travel_default() -> [f32; 2] { [1.0, 0.0] }
+fn recycle_fade_default() -> f32 { 0.15 }
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShapeComposite {
@@ -111,6 +172,13 @@ pub struct Shape {
     pub count: u32,
     #[serde(default = "center_default")]
     pub center: [f32; 2],
+    #[serde(default)] pub origin: Option<Origin>,
+    #[serde(default)] pub attachment: Option<Origin>,
+    #[serde(default)] pub position: Option<[f32; 2]>,
+    #[serde(default)] pub position_unit: Unit,
+    #[serde(default)] pub size_unit: Unit,
+    #[serde(default)] pub anchor: Option<String>,
+    #[serde(default)] pub anchor_offset: [f32; 2],
     #[serde(default)]
     pub spread: [f32; 2],
     #[serde(default = "size_default")]
@@ -130,6 +198,14 @@ pub struct Shape {
     pub motion: Motion,
     #[serde(default = "radius_default")]
     pub radius: [f32; 2],
+    #[serde(default)] pub direction: Direction,
+    #[serde(default)] pub heading: f64,
+    #[serde(default = "angle_spread_default")] pub angle_spread: f64,
+    #[serde(default = "travel_default")] pub travel: [f32; 2],
+    #[serde(default)] pub align_to_motion: bool,
+    #[serde(default = "recycle_fade_default")] pub recycle_fade: f32,
+    #[serde(default)] pub fade: f32,
+    #[serde(default)] pub glow: f32,
     /// Requested period in seconds; snapped to a whole number of cycles for looping scenes.
     #[serde(default = "period_default")]
     pub period: f64,
@@ -147,7 +223,18 @@ pub struct Shape {
     pub pulse: f32,
     #[serde(default)]
     pub composite: ShapeComposite,
+    #[serde(default)] pub path: Option<PathBuf>,
+    #[serde(default)] pub text: Option<String>,
+    #[serde(default)] pub text_source: Option<String>,
+    #[serde(default)] pub font_family: Option<String>,
+    #[serde(default = "font_size_default")] pub font_size: f32,
+    #[serde(default = "line_height_default")] pub line_height: f32,
+    #[serde(default = "raster_size_default")] pub raster_size: u32,
+    #[serde(default)] pub preserve_color: bool,
 }
+fn font_size_default() -> f32 { 64.0 }
+fn line_height_default() -> f32 { 1.2 }
+fn raster_size_default() -> u32 { 1024 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Effect {
@@ -186,7 +273,7 @@ pub enum EffectKind {
 pub struct Instance {
     pub center_size: [f32; 4],
     pub color: [f32; 4],
-    pub params: [f32; 4], // radians, kind (0 circle / 1 box / 2 polygon), sides, outline
+    pub params: [f32; 4], // radians, kind (0 circle / 1 box / 2 polygon / 3 sprite / 4 ray), kind-specific data
 }
 
 #[derive(Debug, Clone, Default)]
@@ -203,6 +290,7 @@ impl Scene {
         scene.validate(path.parent().unwrap_or(Path::new(".")))?;
         Ok(scene)
     }
+    pub fn has_commands(&self) -> bool { self.text_sources.values().any(TextSource::is_command) }
     pub fn shape_count(&self) -> usize {
         self.layers
             .iter()
@@ -228,13 +316,65 @@ impl Scene {
             bail!("Scene background must be opaque");
         }
         validate_effects(&self.effects, base)?;
+        for (name, anchor) in &self.anchors {
+            if name.trim().is_empty() || !anchor.center.iter().all(|v| v.is_finite() && v.abs() <= 100.0) { bail!("Invalid anchor {name}"); }
+        }
+        if self.text_sources.len() > 64 { bail!("At most 64 text sources"); }
+        for (name, source) in &self.text_sources {
+            if name.trim().is_empty() { bail!("Empty text source name"); }
+            match source {
+                TextSource::Sequence { frames, frame_seconds, default } => {
+                    if frames.is_empty() || frames.len() > 128 { bail!("Sequence {name} requires 1..=128 frames"); }
+                    positive(*frame_seconds, "frame_seconds")?;
+                    if frames.iter().chain(std::iter::once(default)).any(|s| s.len() > 16384) { bail!("Text source {name} exceeds 16384 bytes per frame"); }
+                }
+                TextSource::Command { command, interval, timeout, default, layout } => {
+                    if command.is_empty() || command[0].trim().is_empty() || command.len() > 128 || command.iter().any(|a| a.contains('\0') || a.len() > 16384) { bail!("Invalid command arguments for {name}"); }
+                    if !(0.25..=86400.0).contains(interval) || !(0.05..=60.0).contains(timeout) { bail!("Command {name}: interval must be 0.25..=86400s and timeout 0.05..=60s"); }
+                    if default.len() > 16384 || layout.as_ref().is_some_and(|s| s.len() > 16384) { bail!("Command {name}: default/layout exceeds 16384 bytes"); }
+                }
+            }
+        }
         for layer in &self.layers {
             unit(layer.opacity, "layer.opacity")?;
             parse_color(&layer.background)?;
             validate_effects(&layer.effects, base)?;
             for shape in &layer.shapes {
                 parse_color(&shape.color)?;
+                match shape.kind {
+                    ShapeKind::Svg => {
+                        let path = base.join(shape.path.as_ref().context("SVG shape requires path")?);
+                        if !path.is_file() { bail!("SVG asset not found: {}", path.display()); }
+                        if !(16..=4096).contains(&shape.raster_size) { bail!("raster_size must be in 16..=4096"); }
+                        if shape.text.is_some() || shape.font_family.is_some() { bail!("SVG shape cannot use text fields"); }
+                    }
+                    ShapeKind::Text => {
+                        match (&shape.text, &shape.text_source) {
+                            (Some(text), None) if text.len() <= 16384 => {},
+                            (None, Some(name)) if self.text_sources.contains_key(name) => {},
+                            _ => bail!("Text shape requires exactly one valid text or text_source (maximum 16384 bytes)"),
+                        }
+                        if !(8.0..=256.0).contains(&shape.font_size) || !(0.5..=3.0).contains(&shape.line_height) { bail!("Invalid text font_size or line_height"); }
+                        if shape.path.is_some() || shape.preserve_color { bail!("Text shapes use a tinted glyph mask, not path or preserve_color"); }
+                    }
+                    _ => if shape.path.is_some() || shape.text.is_some() || shape.font_family.is_some() || shape.preserve_color { bail!("Sprite fields require svg or text shape"); },
+                }
+                if !matches!(shape.kind, ShapeKind::Text) && shape.text_source.is_some() { bail!("text_source requires text shape"); }
+                if shape.kind.is_sprite() && shape.outline != 0.0 { bail!("Sprite shapes do not support analytic outline"); }
                 unit(shape.opacity, "shape.opacity")?;
+                unit(shape.fade, "shape.fade")?;
+                unit(shape.glow, "shape.glow")?;
+                if !(0.0..=0.5).contains(&shape.recycle_fade) { bail!("recycle_fade must be in [0,0.5]"); }
+                if !(0.0..=360.0).contains(&shape.angle_spread) || !shape.heading.is_finite() || shape.heading.abs() > 1e6 { bail!("Invalid motion heading or angle_spread"); }
+                if !shape.travel.iter().chain(&shape.anchor_offset).all(|v| v.is_finite() && v.abs() <= 100.0) { bail!("Invalid travel or anchor_offset"); }
+                if let Some(name) = &shape.anchor {
+                    if !self.anchors.contains_key(name) { bail!("Unknown shape anchor: {name}"); }
+                } else if shape.anchor_offset != [0.0, 0.0] { bail!("anchor_offset requires anchor"); }
+                if !matches!(shape.kind, ShapeKind::Ray) && (shape.fade != 0.0 || shape.glow != 0.0) { bail!("fade and glow require ray shape"); }
+                if matches!(shape.kind, ShapeKind::Ray) && shape.outline != 0.0 { bail!("Ray shapes do not support outline"); }
+                if matches!(shape.motion, Motion::Radial) && !(shape.radius[0] >= 0.0 && shape.radius[1] > shape.radius[0]) { bail!("Radial radius must be [inner, outer] with 0 <= inner < outer"); }
+                if matches!(shape.motion, Motion::Linear) && shape.travel == [0.0, 0.0] { bail!("Linear travel must be nonzero"); }
+                if shape.align_to_motion && !matches!(shape.motion, Motion::Radial | Motion::Linear) { bail!("align_to_motion requires radial or linear motion"); }
                 unit(shape.outline, "shape.outline")?;
                 unit(shape.size_jitter, "shape.size_jitter")?;
                 unit(shape.pulse, "shape.pulse")?;
@@ -242,12 +382,20 @@ impl Scene {
                 if shape.count == 0 || !(3..=32).contains(&shape.sides) {
                     bail!("Invalid shape count or polygon sides");
                 }
+                if shape.position.is_some() || shape.origin.is_some() {
+                    if shape.anchor.is_some() || shape.center != center_default() { bail!("origin/position cannot be combined with anchor or nondefault center"); }
+                }
+                if let Some(p) = shape.position {
+                    let max = if matches!(shape.position_unit, Unit::Px) { 100000.0 } else { 100.0 };
+                    if !p.iter().all(|v| v.is_finite() && v.abs() <= max) { bail!("Invalid shape position"); }
+                }
+                let max_size = if matches!(shape.size_unit, Unit::Px) { 100000.0 } else { 10.0 };
                 if !shape
                     .size
                     .iter()
-                    .all(|v| v.is_finite() && *v > 0.0 && *v <= 10.0)
+                    .all(|v| v.is_finite() && *v > 0.0 && *v <= max_size)
                 {
-                    bail!("Shape sizes must be finite and in (0,10]");
+                    bail!("Shape sizes must be finite and positive, within the selected unit limit");
                 }
                 if !shape
                     .center
@@ -280,6 +428,14 @@ impl Scene {
         }
     }
     pub fn instances(&self, t: f64) -> Vec<LayerInstances> {
+        self.instances_for_aspect(t, 1.0)
+    }
+    pub fn instances_for_aspect(&self, t: f64, aspect: f32) -> Vec<LayerInstances> {
+        self.instances_for_viewport(t, aspect, 1.0, 1.0)
+    }
+    pub fn instances_for_viewport(&self, t: f64, width: f32, height: f32, pixel_scale: f32) -> Vec<LayerInstances> {
+        assert!(width > 0.0 && height > 0.0 && pixel_scale > 0.0);
+        let aspect = width / height;
         let t = self.time(t);
         self.layers
             .iter()
@@ -288,6 +444,19 @@ impl Scene {
                 let mut out = LayerInstances::default();
                 for (si, shape) in layer.shapes.iter().enumerate() {
                     let color = parse_color(&shape.color).expect("validated color");
+                    let origin = shape.origin.unwrap_or_default();
+                    let attachment = shape.attachment.unwrap_or(origin).point();
+                    let size = match shape.size_unit { Unit::Relative => shape.size, Unit::Px => [shape.size[0]*pixel_scale/height, shape.size[1]*pixel_scale/height] };
+                    let center = if shape.position.is_some() || shape.origin.is_some() {
+                        let p = origin.point();
+                        let mut offset = shape.position.unwrap_or([0.,0.]);
+                        if matches!(shape.position_unit, Unit::Px) { offset[0] *= pixel_scale/width; offset[1] *= pixel_scale/height; }
+                        // Positive offsets point inward from right/bottom edges.
+                        [p[0] + offset[0] * if p[0] == 1. { -1. } else { 1. }, p[1] + offset[1] * if p[1] == 1. { -1. } else { 1. }]
+                    } else { match &shape.anchor {
+                        Some(name) => { let a = &self.anchors[name]; [a.center[0] + shape.anchor_offset[0], a.center[1] + shape.anchor_offset[1]] },
+                        None => shape.center,
+                    }};
                     for i in 0..shape.count {
                         let key = self.seed
                             ^ (li as u64).wrapping_mul(0xD6E8FEB86659FD93)
@@ -295,11 +464,14 @@ impl Scene {
                             ^ (i as u64).wrapping_mul(0xE7037ED1A0B428DB);
                         let r =
                             |n: u64| random(key.wrapping_add(n.wrapping_mul(0x9E3779B97F4A7C15)));
-                        let mut x = shape.center[0] + shape.spread[0] * (2.0 * r(1) - 1.0) as f32;
-                        let mut y = shape.center[1] + shape.spread[1] * (2.0 * r(2) - 1.0) as f32;
+                        let mut x = center[0] + shape.spread[0] * (2.0 * r(1) - 1.0) as f32;
+                        let mut y = center[1] + shape.spread[1] * (2.0 * r(2) - 1.0) as f32;
                         let phase = (shape.phase + if shape.count > 1 { r(3) } else { 0.0 }) * TAU;
                         let rate = cyclic_rate(1.0 / shape.period, self.loop_seconds);
                         let a = TAU * rate * t + phase;
+                        let mut motion_angle = 0.0;
+                        let mut motion_alpha = 1.0;
+                        let progress = (rate * t + phase / TAU).rem_euclid(1.0) as f32;
                         match shape.motion {
                             Motion::Static => {}
                             Motion::Orbit => {
@@ -313,6 +485,22 @@ impl Scene {
                                     * (0.7 * (2.0 * a + r(5) * TAU).cos() + 0.3 * (5.0 * a).sin())
                                         as f32;
                             }
+                            Motion::Radial => {
+                                let heading = (shape.heading + if shape.count > 1 { (r(8) - 0.5) * shape.angle_spread } else { 0.0 }).to_radians();
+                                let inward = matches!(shape.direction, Direction::Inward);
+                                let u = if inward { 1.0 - progress } else { progress };
+                                let distance = shape.radius[0] + (shape.radius[1] - shape.radius[0]) * u;
+                                x += distance * heading.cos() as f32 / aspect;
+                                y += distance * heading.sin() as f32;
+                                motion_angle = heading + if inward { TAU * 0.5 } else { 0.0 };
+                                motion_alpha = recycle_envelope(progress, shape.recycle_fade);
+                            }
+                            Motion::Linear => {
+                                x += shape.travel[0] * (progress - 0.5) / aspect;
+                                y += shape.travel[1] * (progress - 0.5);
+                                motion_angle = f64::from(shape.travel[1]).atan2(f64::from(shape.travel[0]));
+                                motion_alpha = recycle_envelope(progress, shape.recycle_fade);
+                            }
                             Motion::Wrap => {
                                 // Travel horizontally; shader draws edge copies for a continuous wrap.
                                 x = (x + (rate * t) as f32).rem_euclid(1.0);
@@ -322,10 +510,11 @@ impl Scene {
                         let jitter = 1.0 + shape.size_jitter * (2.0 * r(6) - 1.0) as f32;
                         let scale = jitter.max(0.01)
                             * (1.0 - shape.pulse * 0.5 + shape.pulse * 0.5 * a.sin() as f32);
-                        let alpha = color[3] * shape.opacity;
+                        let alpha = color[3] * shape.opacity * motion_alpha;
                         let angle_offset = if shape.count > 1 {
                             match shape.rotation_jitter {
                                 Some(jitter) => jitter * (2.0 * r(7) - 1.0) / 360.0,
+                                None if shape.align_to_motion => 0.0,
                                 None => r(7), // preserve the original scene behavior
                             }
                         } else {
@@ -334,17 +523,28 @@ impl Scene {
                         let angle = (shape.rotation / 360.0
                             + cyclic_rate(shape.spin, self.loop_seconds) * t
                             + angle_offset)
-                            * TAU;
+                            * TAU + if shape.align_to_motion { motion_angle } else { 0.0 };
                         let (kind, sides) = match shape.kind {
                             ShapeKind::Circle => (0., 3.),
                             ShapeKind::Rectangle => (1., 4.),
                             ShapeKind::Triangle => (2., 3.),
                             ShapeKind::Polygon => (2., shape.sides as f32),
+                            ShapeKind::Ray => (4., shape.fade),
+                            // Shape index identifies the immutable texture within this layer.
+                            ShapeKind::Svg | ShapeKind::Text => (3., si as f32),
                         };
+                        let sx = size[0] * scale;
+                        let sy = size[1] * scale;
+                        let dx = (0.5 - attachment[0]) * sx;
+                        let dy = (0.5 - attachment[1]) * sy;
+                        // Rotate around the selected attachment, not the quad center.
+                        let (sin, cos) = angle.sin_cos();
+                        x += (dx * cos as f32 - dy * sin as f32) / aspect;
+                        y += dx * sin as f32 + dy * cos as f32;
                         let instance = Instance {
-                            center_size: [x, y, shape.size[0] * scale, shape.size[1] * scale],
+                            center_size: [x, y, sx, sy],
                             color: [color[0], color[1], color[2], alpha],
-                            params: [angle.rem_euclid(TAU) as f32, kind, sides, shape.outline],
+                            params: [angle.rem_euclid(TAU) as f32, kind, sides, if matches!(shape.kind, ShapeKind::Ray) { shape.glow } else if shape.preserve_color { 1.0 } else { shape.outline }],
                         };
                         match shape.composite {
                             ShapeComposite::Over => out.over.push(instance),
@@ -366,6 +566,12 @@ impl Scene {
             })
             .collect()
     }
+}
+
+fn recycle_envelope(progress: f32, fade: f32) -> f32 {
+    if fade == 0.0 { return 1.0; }
+    let p = (progress.min(1.0 - progress) / fade).clamp(0.0, 1.0);
+    p * p * (3.0 - 2.0 * p)
 }
 
 pub fn cyclic_rate(rate: f64, duration: Option<f64>) -> f64 {
@@ -470,7 +676,7 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
     }
@@ -513,6 +719,76 @@ rotation_jitter = 8.0
             bytemuck::cast_slice::<Instance, u8>(&a[1].cutout),
             bytemuck::cast_slice::<Instance, u8>(&b[1].cutout)
         );
+    }
+    #[test]
+    fn radial_and_linear_motion_align_in_pixel_space() {
+        let s: Scene = toml::from_str(r#"
+loop_seconds = 10.0
+[anchors.ship]
+center = [0.7, 0.6]
+[[layers]]
+name = "rays"
+[[layers.shapes]]
+kind = "ray"
+anchor = "ship"
+motion = "radial"
+heading = 180.0
+radius = [0.1, 0.9]
+period = 10.0
+align_to_motion = true
+fade = 1.0
+[[layers.shapes]]
+kind = "ray"
+motion = "linear"
+travel = [0.4, 0.2]
+period = 10.0
+align_to_motion = true
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
+        let a = s.instances_for_aspect(2.5, 2.0);
+        let b = s.instances_for_aspect(5.0, 2.0);
+        let ray = a[0].over[0];
+        // At quarter cycle the inward radius is 0.1 + 0.8 * 0.75 = 0.7;
+        // viewport aspect 2 converts this to a normalized x offset of 0.35.
+        assert!((ray.center_size[0] - 0.35).abs() < 1e-6);
+        assert!((ray.center_size[1] - 0.6).abs() < 1e-6);
+        assert!((ray.params[0].cos() - 1.0).abs() < 1e-6);
+        assert!(b[0].over[0].center_size[0] > ray.center_size[0]);
+        let l = a[0].over[1];
+        assert!((l.params[0] - 0.5f32.atan()).abs() < 1e-6);
+        assert_eq!(s.instances_for_aspect(0.0, 2.0)[0].over[0].color[3], 0.0);
+        let end = s.instances_for_aspect(12.5, 2.0);
+        assert_eq!(bytemuck::cast_slice::<Instance,u8>(&a[0].over), bytemuck::cast_slice::<Instance,u8>(&end[0].over));
+    }
+    #[test]
+    fn pixel_layout_keeps_edge_margins_at_different_resolutions_and_scales() {
+        let s: Scene = toml::from_str(r#"
+[[layers]]
+name = "HUD"
+[[layers.shapes]]
+kind = "rectangle"
+origin = "top_right"
+position = [50.0, 40.0]
+position_unit = "px"
+size = [240.0, 60.0]
+size_unit = "px"
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
+        for (w,h,scale) in [(1920.,1080.,1.),(1440.,2560.,1.),(3840.,2160.,2.)] {
+            let a = s.instances_for_viewport(0.,w,h,scale)[0].over[0].center_size;
+            assert!((a[0]*w + a[2]*h/2. - (w-50.*scale)).abs() < 0.001);
+            assert!((a[1]*h - a[3]*h/2. - 40.*scale).abs() < 0.001);
+            assert!((a[2]*h - 240.*scale).abs() < 0.001);
+        }
+    }
+    #[test]
+    fn text_sequence_loops_and_uses_default_when_paused() {
+        let source = TextSource::Sequence { frames: vec![" ".into(), ".".into()], frame_seconds: 0.5, default: "-".into() };
+        assert_eq!(source.frame(0.0, Some(10.), false), 1);
+        assert_eq!(source.frame(0.5, Some(10.), false), 2);
+        assert_eq!(source.frame(1.0, Some(10.), false), 1);
+        assert_eq!(source.frame(0.5, Some(10.), true), 0);
+        assert_eq!(source.frame(10.5, Some(10.), false), 2);
     }
     #[test]
     fn scene_repeats() {

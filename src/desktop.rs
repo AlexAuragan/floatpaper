@@ -59,6 +59,7 @@ struct RenderSurface { surface:wgpu::Surface<'static>, config:wgpu::SurfaceConfi
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
 struct RenderKey {
+    scale:u32,
     width:u32,
     height:u32,
     format:wgpu::TextureFormat,
@@ -66,8 +67,8 @@ struct RenderKey {
     isolated:Option<u32>,
 }
 impl RenderKey {
-    fn new(config:&wgpu::SurfaceConfiguration,id:u32,share:bool)->Self {
-        Self {width:config.width,height:config.height,format:config.format,
+    fn new(config:&wgpu::SurfaceConfiguration,id:u32,share:bool,scale:u32)->Self {
+        Self {scale,width:config.width,height:config.height,format:config.format,
             isolated:if share {None} else {Some(id)}}
     }
     fn label(self)->String {
@@ -216,6 +217,7 @@ type RenderPool=HashMap<RenderKey,RenderGroup>;
 
 fn new_group(gpu:&Gpu,scene:&Scene,base:&Path,key:RenderKey,shared:bool)->Result<RenderGroup> {
     let mut renderer=Renderer::new(gpu,scene.clone(),base,key.width,key.height,key.format)?;
+    renderer.set_pixel_scale(key.scale);
     renderer.enable_profile(gpu,key.label());
     let shared=if shared {Some(SharedFrame::new(gpu,key)?)} else {None};
     Ok(RenderGroup{renderer,shared})
@@ -226,7 +228,7 @@ fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene
     for (&id,screen) in &state.surfaces {
         if screen.closed {continue;}
         if let Some(r)=&screen.render {
-            *counts.entry(RenderKey::new(&r.config,id,share)).or_default()+=1;
+            *counts.entry(RenderKey::new(&r.config,id,share,screen.scale as u32)).or_default()+=1;
         }
     }
     pool.retain(|key,_|counts.contains_key(key));
@@ -322,10 +324,11 @@ impl GpuChoice {
     }
 }
 
-pub fn run(path:&Path,mode:Mode)->Result<()> {
+pub fn run(path:&Path,mode:Mode,allow_commands:bool)->Result<()> {
     let path=path.canonicalize().context("Scene path does not exist")?;
     let base=path.parent().context("Missing scene directory")?;
     let mut scene=Scene::load(&path)?;
+    let mut commands=crate::text_commands::Commands::new(&scene,base,allow_commands)?;
     let connection=Connection::connect_to_env().context("Connect to Wayland (run inside Hyprland)")?;
     let display=connection.display();
     let mut queue=connection.new_event_queue::<Desktop>();
@@ -418,6 +421,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
     state.clock=Clock::new(Instant::now());
     let mut reload_at=None;
     let mut last_watch_error=None;
+    let mut text_paused=false;
     while running.load(Ordering::SeqCst) && !state.quit {
         if let Mode::Live{output}=&mode {
             for id in std::mem::take(&mut state.removed) { state.surfaces.remove(&id); }
@@ -437,7 +441,8 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             match reload(&gpu,&mut pool,&path) {
                 Ok(new_scene)=>{
                     scene=new_scene;
-                    if benchmark.frozen() {
+                    commands=crate::text_commands::Commands::new(&scene,base,allow_commands)?;
+                    if benchmark.frozen() || state.clock.paused() {
                         for screen in state.surfaces.values_mut() {screen.last_frame=None;}
                     }
                     eprintln!("Reloaded {}",path.display());
@@ -460,6 +465,16 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             }
         }
         reconcile_renderers(&gpu,&state,&mut pool,&scene,base,share,benchmark)?;
+        let paused=state.clock.paused();
+        if paused != text_paused {
+            text_paused=paused;
+            // Present one fallback frame on each visible output, then freeze.
+            for screen in state.surfaces.values_mut() { screen.last_frame=None; }
+            for group in pool.values_mut() { if let Some(shared)=&mut group.shared { shared.rendered_at=None; } }
+        }
+        let visible=state.surfaces.iter().any(|(id,s)| !s.closed && s.configured && state.outputs.get(id).and_then(|o|o.name.as_deref()).and_then(|n|state.hidden_outputs.get(n)).is_none());
+        commands.set_active(!paused && visible && !benchmark.frozen());
+        let command_values=commands.snapshot();
         for (&id,screen) in &mut state.surfaces {
             if screen.closed || !screen.configured { continue; }
             let name=state.outputs.get(&id).and_then(|o|o.name.as_deref());
@@ -478,14 +493,15 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             if state.clock.paused() && screen.last_frame.is_some() { continue; }
             if !screen.ready || !benchmark.should_present(screen.last_frame) { continue; }
             let r=screen.render.as_ref().context("Surface not configured")?;
-            let key=RenderKey::new(&r.config,id,share);
+            let key=RenderKey::new(&r.config,id,share,screen.scale as u32);
             let group=pool.get_mut(&key).context("Missing render group")?;
             if let Some(last)=screen.last_frame {
                 let remaining=interval.saturating_sub(now.saturating_duration_since(last));
                 if !remaining.is_zero() { timeout=timeout.min(remaining); continue; }
             }
             let frame_time=if benchmark.frozen() {0.0} else {state.clock.elapsed(now).as_secs_f64()};
-            match draw(&gpu,screen,group,&qh,frame_time,now,interval,benchmark)? {
+            group.renderer.set_text_paused(paused);
+            match draw(&gpu,screen,group,&qh,frame_time,now,interval,benchmark,&command_values)? {
                 Some(rendered)=>{
                     screen.last_frame=Some(now);
                     if benchmark.active() {stats.record(id,rendered);}
@@ -558,7 +574,7 @@ fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mu
     }
     Ok(())
 }
-fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Desktop>,t:f64,now:Instant,interval:Duration,benchmark:BenchmarkMode)->Result<Option<bool>> {
+fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Desktop>,t:f64,now:Instant,interval:Duration,benchmark:BenchmarkMode,command_values:&crate::text_commands::Values)->Result<Option<bool>> {
     let r=screen.render.as_mut().context("Surface not configured")?;
     let frame=match r.surface.get_current_texture() {
         Ok(f)=>f,
@@ -572,6 +588,7 @@ fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Deskt
         // one requested frame interval. Never wait for another output.
         let refresh=benchmark.needs_render(shared.rendered_at,now,interval);
         if refresh {
+            group.renderer.update_command_text(gpu,command_values);
             group.renderer.render(gpu,&mut encoder,&shared.view,t);
             shared.rendered_at=Some(now);
         }
@@ -579,6 +596,7 @@ fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Deskt
         refresh
     } else {
         let view=frame.texture.create_view(&Default::default());
+        group.renderer.update_command_text(gpu,command_values);
         group.renderer.render(gpu,&mut encoder,&view,t);
         true
     };
@@ -611,6 +629,14 @@ fn watch(path:&Path,scene:&Scene)->Result<(mpsc::Receiver<notify::Result<notify:
     let mut dirs=std::collections::BTreeSet::<PathBuf>::new();
     for effect in scene.effects.iter().chain(scene.layers.iter().flat_map(|l|l.effects.iter())) {
         if let Some(p)=&effect.shader { let full=base.join(p).canonicalize()?; if let Some(dir)=full.parent() { if !dir.starts_with(base) { dirs.insert(dir.to_path_buf()); } } }
+    }
+    for shape in scene.layers.iter().flat_map(|layer| &layer.shapes) {
+        if let Some(p)=&shape.path {
+            let full=base.join(p).canonicalize()?;
+            if let Some(dir)=full.parent() {
+                if !dir.starts_with(base) { dirs.insert(dir.to_path_buf()); }
+            }
+        }
     }
     for dir in dirs { watcher.watch(&dir,RecursiveMode::NonRecursive)?; }
     Ok((rx,watcher))
@@ -722,12 +748,12 @@ mod sharing_tests {
     fn matching_dimensions_and_format_share_but_other_outputs_do_not() {
         let a=config();
         let mut b=a.clone();
-        assert_eq!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
-        assert_ne!(RenderKey::new(&a,1,false),RenderKey::new(&b,2,false));
+        assert_eq!(RenderKey::new(&a,1,true,1),RenderKey::new(&b,2,true,1));
+        assert_ne!(RenderKey::new(&a,1,false,1),RenderKey::new(&b,2,false,1));
         b.format=wgpu::TextureFormat::Rgba8UnormSrgb;
-        assert_ne!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
+        assert_ne!(RenderKey::new(&a,1,true,1),RenderKey::new(&b,2,true,1));
         b=a.clone();b.width=1440;b.height=2560;
-        assert_ne!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
+        assert_ne!(RenderKey::new(&a,1,true,1),RenderKey::new(&b,2,true,1));
     }
     #[test]
     fn benchmark_modes_control_rendering_and_presentation_independently() {
