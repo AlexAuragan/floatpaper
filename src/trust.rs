@@ -59,6 +59,11 @@ fn read_store(file: &mut File) -> Result<Store> {
     serde_json::from_slice(&bytes).context("Invalid trust store")
 }
 
+// Quote paths for a copyable POSIX shell command, including apostrophes.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 pub fn allowed(path: &Path, scene: &Scene) -> bool {
     let wanted = declarations(scene);
     if wanted.is_empty() { return false; }
@@ -68,10 +73,25 @@ pub fn allowed(path: &Path, scene: &Scene) -> bool {
         let store = read_store(&mut file)?;
         Ok(store.get(path) == Some(&wanted))
     };
-    match check() {
+    let authorized = match check() {
         Ok(ok) => ok,
         Err(e) => { eprintln!("Cannot verify scene trust: {e:#}"); false }
+    };
+    if !authorized {
+        eprintln!("WARNING: Scene commands are not trusted: {}", path.display());
+        eprintln!("  Disabled command sources: {}", wanted.keys().cloned().collect::<Vec<_>>().join(", "));
+        eprintln!("  Command-backed text will display its default values.");
+        eprintln!("  If you trust this scene and its scripts, run:");
+        match (std::env::current_exe(), path.to_str()) {
+            (Ok(exe), Some(scene_path)) if exe.to_str().is_some() => {
+                eprintln!("    {} trust {}", shell_quote(exe.to_str().expect("checked UTF-8")), shell_quote(scene_path));
+            }
+            (_, Some(scene_path)) => eprintln!("    floatpaper trust {}", shell_quote(scene_path)),
+            _ => eprintln!("    floatpaper trust <scene-path>"),
+        }
+        eprintln!("  Then restart the wallpaper or reload the scene.");
     }
+    authorized
 }
 
 pub fn change(path: &Path, grant: bool) -> Result<()> {
@@ -107,6 +127,10 @@ pub fn change(path: &Path, grant: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shell_quotes_paths_with_spaces_and_apostrophes() {
+        assert_eq!(shell_quote("/tmp/my scene's.toml"), "'/tmp/my scene'\\''s.toml'");
+    }
     #[test]
     fn authorization_depends_on_command_names_and_argv_not_visuals() {
         let config = r#"
