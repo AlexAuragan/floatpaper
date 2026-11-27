@@ -202,7 +202,8 @@ struct StaticLayerCache {
 
 fn geometry_is_static(layer: &scene::Layer) -> bool {
     layer.shapes.iter().all(|shape| {
-        matches!(shape.motion, scene::Motion::Static)
+        !matches!(shape.kind, scene::ShapeKind::Spectrum)
+            && matches!(shape.motion, scene::Motion::Static)
             && shape.spin == 0.0
             && shape.pulse == 0.0
             && shape.text_source.is_none()
