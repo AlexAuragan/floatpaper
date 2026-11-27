@@ -528,7 +528,7 @@ fn sparse_glitch_eligible(layer: &scene::Layer, clear: wgpu::Color, terminal: bo
         && layer.effects[0].kind == EffectKind::Glitch
 }
 
-fn glitch_scissor(instances: &[Instance], width: u32, height: u32, strength: f32) -> Option<Scissor> {
+fn glitch_scissor(instances: &[Instance], width: u32, height: u32, strength: f32, style: scene::GlitchStyle) -> Option<Scissor> {
     if instances.is_empty() || width == 0 || height == 0 || !strength.is_finite() {
         return None;
     }
@@ -558,7 +558,8 @@ fn glitch_scissor(instances: &[Instance], width: u32, height: u32, strength: f32
     // glitch.wgsl: absolute band displacement <= 0.09*k*width;
     // chromatic split <= 0.009*k*width. Bound both axes regardless of
     // orientation or phase, and include filtering/rasterization slack.
-    let pad = 0.099 * f64::from(strength.clamp(0.0, 1.0)) * w + 4.0;
+    let max_shift = match style { scene::GlitchStyle::Legacy => 0.099, scene::GlitchStyle::Fine => 0.017 };
+    let pad = max_shift * f64::from(strength.clamp(0.0, 1.0)) * w + 4.0;
     let x0 = (min_x - pad).floor().clamp(0.0, w) as u32;
     let y0 = (min_y - pad).floor().clamp(0.0, h) as u32;
     let x1 = (max_x + pad).ceil().clamp(0.0, w) as u32;
@@ -1177,7 +1178,7 @@ impl Renderer {
                     {
                         let over = &ranges[i].0;
                         glitch_scissor(&flat[over.start as usize..over.end as usize],
-                            self.width, self.height, strength)
+                            self.width, self.height, strength, last.config.glitch_style)
                     } else {
                         None
                     };
@@ -1542,7 +1543,10 @@ fn compile_effects(
                 }
                 EffectKind::Glitch => vec![(
                     "glitch",
-                    Cow::Owned(format!("const GLITCH_CONTINUOUS: bool = {};\n{}", e.continuous, include_str!("../shaders/glitch.wgsl"))),
+                    Cow::Owned(format!("const GLITCH_CONTINUOUS: bool = {};\n{}", e.continuous, match e.glitch_style {
+                        scene::GlitchStyle::Legacy => include_str!("../shaders/glitch.wgsl"),
+                        scene::GlitchStyle::Fine => include_str!("../shaders/glitch_fine.wgsl"),
+                    })),
                 )],
                 EffectKind::Blur => {
                     vec![("blur", Cow::Borrowed(include_str!("../shaders/blur.wgsl")))]
@@ -1798,17 +1802,19 @@ effects = [{kind = "crt"}]
             color: [1.0; 4],
             params: [0.7853982, 1.0, 4.0, 0.0],
         };
-        let rect = glitch_scissor(&[shape], 1000, 1000, 1.0).unwrap();
+        let rect = glitch_scissor(&[shape], 1000, 1000, 1.0, scene::GlitchStyle::Legacy).unwrap();
         // Radius ~76.4 px, displacement/split 99 px, margin 4 px.
         assert_eq!(rect, Scissor { x: 320, y: 320, width: 360, height: 360 });
-        let weak = glitch_scissor(&[shape], 1000, 1000, 0.0).unwrap();
+        let weak = glitch_scissor(&[shape], 1000, 1000, 0.0, scene::GlitchStyle::Legacy).unwrap();
         assert!(weak.width < rect.width);
+        let fine = glitch_scissor(&[shape], 1000, 1000, 1.0, scene::GlitchStyle::Fine).unwrap();
+        assert_eq!(fine, Scissor { x: 402, y: 402, width: 196, height: 196 });
         let mut edge = shape;
         edge.center_size[0] = 0.0;
-        let clipped = glitch_scissor(&[edge], 1000, 1000, 1.0).unwrap();
+        let clipped = glitch_scissor(&[edge], 1000, 1000, 1.0, scene::GlitchStyle::Legacy).unwrap();
         assert_eq!(clipped.x, 0);
         assert!(clipped.width >= 180);
-        assert_eq!(glitch_scissor(&[], 1000, 1000, 1.0), None);
+        assert_eq!(glitch_scissor(&[], 1000, 1000, 1.0, scene::GlitchStyle::Legacy), None);
     }
 
     #[test]
