@@ -773,7 +773,7 @@ mod tests {
     }
     #[test]
     fn audio_modulation_changes_shape_and_effect_without_restarting_rotation() {
-        let s: Scene = toml::from_str(r#"
+        let s: Scene = toml::from_str(r##"
 [audio]
 enabled = true
 [[layers]]
@@ -799,7 +799,7 @@ size = 0.5
 spin = 0.25
 opacity = 0.5
 color = "#ffffff"
-"#).unwrap();
+"##).unwrap();
         s.validate(Path::new(".")).unwrap();
         let responses = s.audio_responses();
         assert_eq!(responses.len(),1);
