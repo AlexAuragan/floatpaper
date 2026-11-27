@@ -574,6 +574,114 @@ struct LayerPipeline {
     effects: Vec<EffectPipeline>,
     clear: wgpu::Color,
 }
+// Sprite bind groups retain their textures. Assets are immutable for the
+// lifetime of a renderer; resize changes only the geometry viewport.
+struct SpriteGeometry {
+    over: wgpu::RenderPipeline,
+    cutout: wgpu::RenderPipeline,
+    assets: BTreeMap<(usize, usize), wgpu::BindGroup>,
+}
+impl SpriteGeometry {
+    fn new(gpu: &Gpu, scene: &Scene, base: &Path, viewport: &wgpu::Buffer,
+        sampler: &wgpu::Sampler, format: wgpu::TextureFormat) -> Result<Option<Self>> {
+        if !scene.layers.iter().any(|l| l.shapes.iter().any(|s| s.kind.is_sprite())) {
+            return Ok(None);
+        }
+        let d = &gpu.device;
+        let layout = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("sprite geometry interface"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false, min_binding_size: wgpu::BufferSize::new(16) },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sprite geometry"),
+            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("../shaders/sprite.wgsl"))),
+        });
+        let buffers = [wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Instance>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4],
+        }];
+        let over = pipeline(d, "sprite over", &shader, &layout, format, Some(BLEND), &buffers);
+        let cutout = pipeline(d, "sprite cutout", &shader, &layout, format, Some(CUTOUT_BLEND), &buffers);
+        let mut assets = BTreeMap::new();
+        let mut fonts = None;
+        let mut bytes = 0usize;
+        for (li, layer) in scene.layers.iter().enumerate() {
+            for (si, shape) in layer.shapes.iter().enumerate() {
+                if !shape.kind.is_sprite() { continue; }
+                let mut raster = crate::sprites::rasterize(shape, base, &mut fonts)
+                    .with_context(|| format!("Rasterize layer '{}' shape {si}", layer.name))?;
+                bytes += raster.rgba.len();
+                if bytes > crate::sprites::MAX_BYTES { bail!("Sprite textures exceed 64 MiB per renderer"); }
+                check_size(gpu, raster.width, raster.height)?;
+                raster.premultiplied_linear_srgb();
+                let size = extent(raster.width, raster.height);
+                let texture = d.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("sprite asset"), size, mip_level_count: 1, sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                gpu.queue.write_texture(
+                    wgpu::ImageCopyTexture { texture: &texture, mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    &raster.rgba,
+                    wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(raster.width * 4), rows_per_image: Some(raster.height) },
+                    size,
+                );
+                let view = texture.create_view(&Default::default());
+                let bind = d.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("sprite asset binding"), layout: &layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: viewport.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+                    ],
+                });
+                assets.insert((li, si), bind);
+            }
+        }
+        eprintln!("Sprite assets: {} ({:.2} MiB)", assets.len(), bytes as f64 / 1048576.);
+        Ok(Some(Self { over, cutout, assets }))
+    }
+}
+
+// Preserve the original analytic draw batching and split only when the
+// texture changes. Over instances retain declaration order; cutouts follow.
+fn sprite_key(instance: &Instance) -> Option<usize> {
+    if instance.params[1] == 3.0 { Some(instance.params[2] as usize) } else { None }
+}
+fn geometry_runs(flat: &[Instance], range: Range<u32>) -> Vec<(Option<usize>, Range<u32>)> {
+    let mut runs = Vec::new();
+    let mut start = range.start;
+    while start < range.end {
+        let key = sprite_key(&flat[start as usize]);
+        let mut end = start + 1;
+        while end < range.end && sprite_key(&flat[end as usize]) == key { end += 1; }
+        runs.push((key, start..end));
+        start = end;
+    }
+    runs
+}
+
 pub struct Renderer {
     scene: Scene,
     width: u32,
@@ -582,6 +690,7 @@ pub struct Renderer {
     internal_format: wgpu::TextureFormat,
     geometry: wgpu::RenderPipeline,
     geometry_cutout: wgpu::RenderPipeline,
+    sprites: Option<SpriteGeometry>,
     geo_bind: wgpu::BindGroup,
     instances: wgpu::Buffer,
     instance_capacity: usize,
@@ -733,6 +842,7 @@ impl Renderer {
                     attributes: &wgpu::vertex_attr_array![0=>Float32x4,1=>Float32x4,2=>Float32x4],
                 }],
             );
+            let sprites = SpriteGeometry::new(gpu, &scene, base, &geometry_uniform, &sampler, internal_format)?;
             let composite = effect_pipeline(
                 d,
                 &layout,
@@ -792,6 +902,7 @@ impl Renderer {
                 internal_format,
                 geometry,
                 geometry_cutout,
+                sprites,
                 geo_bind,
                 instances,
                 instance_capacity,
@@ -941,17 +1052,34 @@ impl Renderer {
                         "geometry",
                     );
                     let (over, cutout) = &ranges[i];
-                    if !over.is_empty() {
-                        pass.set_pipeline(&self.geometry);
-                        pass.set_bind_group(0, &self.geo_bind, &[]);
+                    if self.sprites.is_none() {
+                        // Original fast path for scenes without texture-backed shapes.
+                        if !over.is_empty() {
+                            pass.set_pipeline(&self.geometry);
+                            pass.set_bind_group(0, &self.geo_bind, &[]);
+                            pass.set_vertex_buffer(0, self.instances.slice(..));
+                            pass.draw(0..6, over.clone());
+                        }
+                        if !cutout.is_empty() {
+                            pass.set_pipeline(&self.geometry_cutout);
+                            pass.set_bind_group(0, &self.geo_bind, &[]);
+                            pass.set_vertex_buffer(0, self.instances.slice(..));
+                            pass.draw(0..6, cutout.clone());
+                        }
+                    } else if let Some(sprites) = &self.sprites {
                         pass.set_vertex_buffer(0, self.instances.slice(..));
-                        pass.draw(0..6, over.clone());
-                    }
-                    if !cutout.is_empty() {
-                        pass.set_pipeline(&self.geometry_cutout);
-                        pass.set_bind_group(0, &self.geo_bind, &[]);
-                        pass.set_vertex_buffer(0, self.instances.slice(..));
-                        pass.draw(0..6, cutout.clone());
+                        for (range, is_cutout) in [(over, false), (cutout, true)] {
+                            for (key, run) in geometry_runs(&flat, range.clone()) {
+                                if let Some(si) = key {
+                                    pass.set_pipeline(if is_cutout { &sprites.cutout } else { &sprites.over });
+                                    pass.set_bind_group(0, &sprites.assets[&(i, si)], &[]);
+                                } else {
+                                    pass.set_pipeline(if is_cutout { &self.geometry_cutout } else { &self.geometry });
+                                    pass.set_bind_group(0, &self.geo_bind, &[]);
+                                }
+                                pass.draw(0..6, run);
+                            }
+                        }
                     }
                 }
                 let (effects, terminal) = match layer.effects.split_last() {
