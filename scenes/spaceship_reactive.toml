@@ -16,24 +16,24 @@ kind = "command"
 command = ["bash", "scripts/spaceship_hud.sh", "nav"]
 interval = 1.0
 timeout = 2.0
-default = "+- NAV / FLIGHT 01 -----------+\n| MODE    : CRUISE            |\n| VECTOR  : 125.04 DEG        |\n| TRACK   : AUTO              |\n| CLOCK   : --:--:--          |\n+-----------------------------+"
-layout = "+- NAV / FLIGHT 01 -----------+\n| MODE    : CRUISE            |\n| VECTOR  : 125.04 DEG        |\n| TRACK   : AUTO              |\n| CLOCK   : --:--:--          |\n+-----------------------------+"
+default = "┌─ 01 / NAVIGATION          \n  CRUISE         AUTO       \n  HDG         125.04°       \n  UTC        --:--:--       \n└────────────────────────── "
+layout = "┌─ 01 / NAVIGATION          \n  CRUISE         AUTO       \n  HDG         125.04°       \n  UTC        --:--:--       \n└────────────────────────── "
 
 [text_sources.core]
 kind = "command"
 command = ["bash", "scripts/spaceship_hud.sh", "core"]
 interval = 5.0
 timeout = 2.0
-default = "+- CORE / TELEMETRY ----------+\n| CPU BUS :  --%              |\n| GPU BUS :  --%              |\n| THERMAL :  -- C             |\n| STATUS  : STANDBY           |\n+-----------------------------+"
-layout = "+- CORE / TELEMETRY ----------+\n| CPU BUS :  --%              |\n| GPU BUS :  --%              |\n| THERMAL :  -- C             |\n| STATUS  : STANDBY           |\n+-----------------------------+"
+default = "┌─ 02 / SYSTEMS             \n  CPU             --%       \n  GPU             --%       \n  THERMAL        -- C       \n└────────────────────────── "
+layout = "┌─ 02 / SYSTEMS             \n  CPU             --%       \n  GPU             --%       \n  THERMAL        -- C       \n└────────────────────────── "
 
 [text_sources.uplink]
 kind = "command"
 command = ["bash", "scripts/spaceship_hud.sh", "uplink"]
 interval = 1.0
 timeout = 2.0
-default = "+- COMMS / UPLINK ------------+\n| CHANNEL : 01                |\n| GAIN    :  --%              |\n| [--------------------]      |\n| STATUS  : STANDBY           |\n+-----------------------------+"
-layout = "+- COMMS / UPLINK ------------+\n| CHANNEL : 01                |\n| GAIN    :  --%              |\n| [--------------------]      |\n| STATUS  : STANDBY           |\n+-----------------------------+"
+default = "┌─ 03 / AUDIO LINK          \n  OUTPUT          --%       \n  ░░░░░░░░░░░░░░            \n  STANDBY                   \n└────────────────────────── "
+layout = "┌─ 03 / AUDIO LINK          \n  OUTPUT          --%       \n  ░░░░░░░░░░░░░░            \n  STANDBY                   \n└────────────────────────── "
 
 [[layers]]
 name = "distant star halos"
@@ -356,12 +356,12 @@ text_source = "nav"
 origin = "top_left"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#71c4e8"
-opacity = 0.28
+opacity = 0.18
 
 [[layers.shapes]]
 kind = "text"
@@ -369,12 +369,12 @@ text_source = "core"
 origin = "top_right"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#71c4e8"
-opacity = 0.28
+opacity = 0.18
 
 [[layers.shapes]]
 kind = "text"
@@ -382,12 +382,12 @@ text_source = "uplink"
 origin = "bottom_left"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#71c4e8"
-opacity = 0.28
+opacity = 0.18
 
 [[layers]]
 name = "HUD readouts"
@@ -398,12 +398,12 @@ text_source = "nav"
 origin = "top_left"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#b7dce8"
-opacity = 0.82
+opacity = 0.72
 
 [[layers.shapes]]
 kind = "text"
@@ -411,12 +411,12 @@ text_source = "core"
 origin = "top_right"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#b7dce8"
-opacity = 0.82
+opacity = 0.72
 
 [[layers.shapes]]
 kind = "text"
@@ -424,9 +424,9 @@ text_source = "uplink"
 origin = "bottom_left"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#b7dce8"
-opacity = 0.82
+opacity = 0.72
