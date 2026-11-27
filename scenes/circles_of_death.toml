@@ -3,7 +3,7 @@ fps = 30
 loop_seconds = 120.0
 seed = 671
 background = "#14090d"
-effects = [{ kind = "custom", shader = "../shaders/battle_snow.wgsl", intensity = 0.65, period = 12.0 }, { kind = "custom", shader = "../shaders/custom_vignette.wgsl", intensity = 0.32 }]
+effects = [{ kind = "custom", shader = "../shaders/battle_snow.wgsl", intensity = 0.48, period = 12.0 }, { kind = "custom", shader = "../shaders/custom_vignette.wgsl", intensity = 0.32 }]
 
 [[layers]]
 name = "crimson atmosphere"
@@ -67,7 +67,7 @@ kind = "svg"
 path = "assets/battle_gear.svg"
 center = [1.0,1.0]
 size = [0.82,0.82]
-color = "#100b10"
+color = "#040305"
 spin = 0.0083333333
 raster_size = 768
 
@@ -76,7 +76,7 @@ kind = "svg"
 path = "assets/battle_gear.svg"
 center = [1.0,1.0]
 size = [0.74,0.74]
-color = "#302027"
+color = "#100b10"
 spin = 0.0083333333
 opacity = 0.32
 raster_size = 512
@@ -85,6 +85,6 @@ raster_size = 512
 kind = "circle"
 center = [1.0,1.0]
 size = [0.20,0.20]
-color = "#120c12"
+color = "#080609"
 outline = 0.16
 
