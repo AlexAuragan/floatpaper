@@ -187,6 +187,8 @@ Set `FLOATPAPER_BENCHMARK_MODE` to one of three explicit values:
 
 All three modes use the same group and offscreen texture arrangement. They are intended to isolate the incremental cost of scene rendering and ongoing presentation. Every five seconds, the benchmark logs actual scene render and per-surface submission rates, not displayed FPS. Use an external GPU utilization and power monitor with the timestamp profiler disabled, identical monitor configuration, desktop contents and intermediate texture mode. Wait for startup to settle and compare steady-state readings. Do not move windows or the pointer during measurement. Stop each run before starting the next.
 
+For an isolated transfer-path comparison, set `FLOATPAPER_FORCE_PRESENT_BLIT=1` in replay mode. This omits COPY_DST from surface configuration and uses the existing unfiltered texel-load render pass instead of a texture copy. Confirm `shared frame transfer: blit` in startup logs. Both paths present the same frozen frame; compare the same surface submission rates and GPU utilization. This also works with ordinary shared live rendering.
+
 The render-minus-replay and replay-minus-hold differences are experimental indicators, not additive or exact GPU cost attribution: frequency, memory traffic, compositor damage tracking and cross-GPU transfers can vary. Render mode adds an offscreen transfer to singleton outputs compared with regular live mode. Replay/hold intentionally freeze the wallpaper; these are diagnostic modes, not visual-quality-preserving animation optimizations. Without the environment variable, live rendering follows its regular path.
 
 ## GPU profiling (live or preview)
