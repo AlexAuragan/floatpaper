@@ -112,7 +112,7 @@ decay = 0.15
 
 [[layers]]
 name = "near-geometry"
-effects = [{ kind = "glitch", intensity = 0.35, period = 48.0, pulse = 0.6, audio = { signal = "kick_strength", intensity = 0.20, attack = 0.012, decay = 0.12 } }]
+effects = [{ kind = "glitch", glitch_style = "fine", intensity = 0.35, period = 48.0, pulse = 0.6, audio = { signal = "kick_strength", intensity = 0.20, attack = 0.012, decay = 0.12 } }]
 
 [[layers.shapes]]
 kind = "triangle"
