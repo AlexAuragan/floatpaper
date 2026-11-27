@@ -405,7 +405,12 @@ fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mu
         let format=caps.formats.iter().copied().find(|f|f.is_srgb()).or_else(||caps.formats.first().copied()).context("GPU cannot present to this output")?;
         let alpha_mode=if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) { wgpu::CompositeAlphaMode::Opaque } else { *caps.alpha_modes.first().context("No supported alpha modes")? };
         let mut usage=wgpu::TextureUsages::RENDER_ATTACHMENT;
-        if share && caps.usages.contains(wgpu::TextureUsages::COPY_DST) { usage|=wgpu::TextureUsages::COPY_DST; }
+        // A/B test the render-pass transfer against the swapchain copy path.
+        // Omit COPY_DST when forced so the swapchain is allocated for rendering only.
+        let force_blit=std::env::var_os("FLOATPAPER_FORCE_PRESENT_BLIT").is_some();
+        if share && !force_blit && caps.usages.contains(wgpu::TextureUsages::COPY_DST) {
+            usage|=wgpu::TextureUsages::COPY_DST;
+        }
         let config=wgpu::SurfaceConfiguration { usage,format,width,height,present_mode:wgpu::PresentMode::Fifo,desired_maximum_frame_latency:2,alpha_mode,view_formats:vec![] };
         surface.configure(&gpu.device,&config);
         screen.render=Some(RenderSurface{surface,config});
