@@ -12,6 +12,7 @@ use std::{
 fn fps_default() -> u32 {
     30
 }
+fn default_true() -> bool { true }
 fn one() -> f32 {
     1.0
 }
@@ -85,7 +86,7 @@ pub struct ShapeAudio {
     #[serde(default = "audio_attack")] pub attack: f32,
     #[serde(default = "audio_decay")] pub decay: f32,
     #[serde(default = "one")] pub power: f32,
-    #[serde(default)] pub logarithmic: bool,
+    #[serde(default = "default_true")] pub logarithmic: bool,
     #[serde(default)] pub size: f32,
     #[serde(default)] pub position: [f32;2],
     #[serde(default)] pub spin: f64,
@@ -104,7 +105,7 @@ pub struct EffectAudio {
     #[serde(default = "audio_attack")] pub attack: f32,
     #[serde(default = "audio_decay")] pub decay: f32,
     #[serde(default = "one")] pub power: f32,
-    #[serde(default)] pub logarithmic: bool,
+    #[serde(default = "default_true")] pub logarithmic: bool,
     #[serde(default)] pub intensity: f32,
 }
 impl EffectAudio {
@@ -280,6 +281,8 @@ fn raster_size_default() -> u32 { 1024 }
 #[serde(deny_unknown_fields)]
 pub struct Effect {
     pub kind: EffectKind,
+    #[serde(default = "default_true")]
+    pub continuous: bool,
     #[serde(default = "intensity_default")]
     pub intensity: f32,
     #[serde(default = "period_default")]
@@ -774,6 +777,19 @@ mod tests {
         for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
+    }
+    #[test]
+    fn glitch_and_audio_defaults_are_opt_out() {
+        let effect: Effect = toml::from_str("kind = \"glitch\"").unwrap();
+        assert!(effect.continuous);
+        let effect: Effect = toml::from_str("kind = \"glitch\"\ncontinuous = false").unwrap();
+        assert!(!effect.continuous);
+        let shape: ShapeAudio = toml::from_str("signal = \"bass\"").unwrap();
+        let audio: EffectAudio = toml::from_str("signal = \"bass\"").unwrap();
+        assert!(shape.response().logarithmic && audio.response().logarithmic);
+        let shape: ShapeAudio = toml::from_str("signal = \"bass\"\nlogarithmic = false\npower = 2.0").unwrap();
+        assert!(!shape.response().logarithmic);
+        shape.response().validate().unwrap();
     }
     #[test]
     fn audio_modulation_changes_shape_and_effect_without_restarting_rotation() {
