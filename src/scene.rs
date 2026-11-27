@@ -319,11 +319,17 @@ pub struct Effect {
     pub offset: [f32; 2],
     #[serde(default, alias = "orientation")]
     pub rotation: Option<f32>,
-    #[serde(default = "spacing_default")]
-    pub spacing: f32,
+    #[serde(default)]
+    pub spacing: Option<f32>,
     #[serde(default = "effect_color_default")]
     pub color: String,
     #[serde(default)] pub audio: Option<EffectAudio>,
+}
+
+impl Effect {
+    pub fn effective_spacing(&self) -> f32 {
+        self.spacing.unwrap_or_else(|| if self.kind == EffectKind::Crt { 3.0 } else { spacing_default() })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -803,7 +809,7 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
                 bail!("Effect rotation must be finite");
             }
         }
-        if !e.spacing.is_finite() || e.spacing <= 0.0 {
+        if !e.effective_spacing().is_finite() || e.effective_spacing() <= 0.0 {
             bail!("Effect spacing must be > 0");
         }
 
@@ -814,7 +820,7 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
             if e.rotation.is_some() && e.kind == EffectKind::Noise { eprintln!("Warning: noise ignores rotation"); }
             if e.kind != EffectKind::Grid {
                 if e.offset != [0.0, 0.0] { eprintln!("Warning: {:?} ignores offset", e.kind); }
-                if e.spacing != spacing_default() { eprintln!("Warning: {:?} ignores spacing", e.kind); }
+                if e.kind != EffectKind::Crt && e.spacing.is_some_and(|s| s != spacing_default()) { eprintln!("Warning: {:?} ignores spacing", e.kind); }
                 if e.color != effect_color_default() { eprintln!("Warning: {:?} ignores color", e.kind); }
             }
         }
@@ -845,6 +851,18 @@ pub fn parse_color(s: &str) -> Result<[f32; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn effect_spacing_defaults_and_explicit_crt_spacing() {
+        for (kind, default) in [("crt", 3.0), ("grid", 48.0), ("custom", 48.0)] {
+            let e: Effect = toml::from_str(&format!("kind = \"{kind}\"")).unwrap();
+            assert_eq!(e.effective_spacing(), default);
+        }
+        for spacing in [6.0, 48.0] {
+            let e: Effect = toml::from_str(&format!("kind = \"crt\"\nspacing = {spacing}")).unwrap();
+            assert_eq!(e.effective_spacing(), spacing);
+            assert!(validate_effects(&[e], Path::new(".")).is_ok());
+        }
+    }
     #[test]
     fn static_custom_effect_validation() {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes");
