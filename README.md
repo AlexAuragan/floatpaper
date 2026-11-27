@@ -189,6 +189,12 @@ Live outputs with matching physical buffer dimensions and surface texture format
 
 Render groups are rebuilt/reconciled on output size changes, hotplug, or successful scene reload; unused groups are released. Set `FLOATPAPER_DISABLE_OUTPUT_SHARING=1` to restore independent live rendering. The profiler labels shared-mode renderers by group dimensions and format, and reports unique rendered frames (not the number of surface presentations). Shared-frame transfers are outside its measured effect-pass durations, so compare actual GPU utilization with profiling disabled too.
 
+## Experimental visibility suspension (Hyprland live)
+
+Set `FLOATPAPER_SUSPEND_HIDDEN=1` to suspend wallpaper rendering and presentation independently on outputs that Hyprland reports as powered off or covered by a mapped, non-hidden true fullscreen client on the active workspace. Maximized clients, inactive workspaces and outputs with a special workspace open are not treated as hidden. Floatpaper retains the last buffer and continues its logical animation clock; it resumes at the current animation time, respecting Wayland frame callbacks. Other outputs remain independent. Preview and export are unchanged.
+
+This is opt-in because the public IPC does not prove actual client opacity: translucent fullscreen windows or compositor transitions may expose a frozen wallpaper. It does not attempt general window occlusion detection. A worker subscribes to Hyprland's event socket and refreshes monitor/client JSON on changes (coalesced to at most one refresh per 150 ms), with a two-second reconciliation interval for missing events and DPMS changes. No IPC requests block the render loop. Missing IPC, disconnected sockets or unrecognized JSON restore normal rendering; reconnects are attempted automatically. Suspension and resume transitions are logged. Unset the variable for the original behavior or for baseline benchmarks.
+
 ## Presentation-cost benchmark (live)
 
 Set `FLOATPAPER_BENCHMARK_MODE` to one of three explicit values:
@@ -227,7 +233,7 @@ shaders/        WGSL geometry and built-in/custom effects
 scenes/         minimal smoke scene + original Pure Black-inspired demo
 ```
 
-The four intermediate render textures are reused on each output: two ping-pong textures for a layer, two for the composited scene/global effects. Geometry is instanced; colors are linear and intermediate textures use RGBA16Float with premultiplied-alpha blending. A single GPU device is shared across outputs. Frame callbacks plus an FPS cap pace the renderer; no desktop visibility or occlusion integration is promised. The initial desktop adapter is selected for the first output; mixed-GPU outputs may not work.
+The four intermediate render textures are reused on each output: two ping-pong textures for a layer, two for the composited scene/global effects. Geometry is instanced; colors are linear and intermediate textures use RGBA16Float with premultiplied-alpha blending. A single GPU device is shared across outputs. Frame callbacks plus an FPS cap pace the renderer; optional Hyprland IPC suspension is available for fullscreen and DPMS, not arbitrary occlusion. The initial desktop adapter is selected for the first output; mixed-GPU outputs may not work.
 
 ### Deliberate first-version boundaries
 

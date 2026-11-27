@@ -1,7 +1,8 @@
 //! Minimal native Wayland backend. The renderer never sees Wayland objects.
 use crate::{renderer::{Gpu,Renderer},scene::Scene};
 use anyhow::{bail, Context, Result};
-use calloop::EventLoop;
+use calloop::{EventLoop, channel};
+use crate::visibility::{self, HiddenOutputs, Reason};
 use calloop_wayland_source::WaylandSource;
 use notify::{EventKind, RecursiveMode, Watcher};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle};
@@ -25,9 +26,10 @@ struct Desktop {
     want_dmabuf:bool,
     main_device:Option<Vec<u8>>,
     feedback_done:bool,
+    hidden_outputs:HiddenOutputs,
     quit:bool,
 }
-impl Default for Desktop { fn default()->Self { Self { compositor:None,layer_shell:None,wm_base:None,outputs:BTreeMap::new(),surfaces:BTreeMap::new(),removed:Vec::new(),want_dmabuf:false,main_device:None,feedback_done:false,quit:false } } }
+impl Default for Desktop { fn default()->Self { Self { compositor:None,layer_shell:None,wm_base:None,outputs:BTreeMap::new(),surfaces:BTreeMap::new(),removed:Vec::new(),want_dmabuf:false,main_device:None,feedback_done:false,hidden_outputs:HiddenOutputs::new(),quit:false } } }
 const PREVIEW:u32=0;
 struct Screen {
     // Drop wgpu surface before releasing native wl_surface (raw handles are borrowed).
@@ -41,6 +43,7 @@ struct Screen {
     ready:bool,
     closed:bool,
     last_frame:Option<Instant>,
+    suspended:Option<Reason>,
 }
 enum Role { Layer(zwlr_layer_surface_v1::ZwlrLayerSurfaceV1), Window(xdg_surface::XdgSurface,xdg_toplevel::XdgToplevel) }
 impl Drop for Screen {
@@ -344,7 +347,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             top.set_title("Floatpaper preview".into());
             top.set_app_id("floatpaper.preview".into());
             surface.commit();
-            state.surfaces.insert(PREVIEW,Screen { render:None,role:Role::Window(xdg,top),surface,logical:(*width,*height),scale:1,pending:true,configured:false,ready:true,closed:false,last_frame:None });
+            state.surfaces.insert(PREVIEW,Screen { render:None,role:Role::Window(xdg,top),surface,logical:(*width,*height),scale:1,pending:true,configured:false,ready:true,closed:false,last_frame:None,suspended:None });
         }
         Mode::Live{output}=>{
             if state.layer_shell.is_none() { bail!("Compositor does not support wlr-layer-shell"); }
@@ -372,6 +375,20 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
     }
     if benchmark.active() {
         eprintln!("Presentation benchmark: {benchmark:?}; all render groups use offscreen output");
+    }
+    // Opt-in: Hyprland IPC fullscreen state does not guarantee opacity.
+    if live && std::env::var_os("FLOATPAPER_SUSPEND_HIDDEN").is_some() {
+        let (tx,rx)=channel::channel::<HiddenOutputs>();
+        event_loop.handle().insert_source(rx, |event,_,state| {
+            match event {
+                channel::Event::Msg(hidden)=>state.hidden_outputs=hidden,
+                channel::Event::Closed=>state.hidden_outputs.clear(),
+            }
+        }).map_err(|e|anyhow::anyhow!("Register visibility channel: {e}"))?;
+        match visibility::start(tx,running.clone()) {
+            Ok(())=>eprintln!("Visibility suspension: Hyprland fullscreen/DPMS (opt-in)"),
+            Err(e)=>eprintln!("Visibility suspension unavailable: {e:#}; rendering all outputs"),
+        }
     }
     let mut stats=BenchmarkStats::new();
     let mut pool=RenderPool::new();
@@ -420,7 +437,21 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
         }
         reconcile_renderers(&gpu,&state,&mut pool,&scene,base,share,benchmark)?;
         for (&id,screen) in &mut state.surfaces {
-            if screen.closed || !screen.configured || !screen.ready || !benchmark.should_present(screen.last_frame) { continue; }
+            if screen.closed || !screen.configured { continue; }
+            let name=state.outputs.get(&id).and_then(|o|o.name.as_deref());
+            let reason=name.and_then(|n|state.hidden_outputs.get(n)).copied();
+            if reason!=screen.suspended {
+                match reason {
+                    Some(reason)=>eprintln!("Suspended output {} ({reason:?})",name.unwrap_or("unnamed")),
+                    None=>eprintln!("Resumed output {}",name.unwrap_or("unnamed")),
+                }
+                screen.suspended=reason;
+            }
+            // Allow an initial buffer behind fullscreen so uncovering never
+            // exposes an unmapped layer. Keep the last buffer while paused.
+            // Do not bypass an outstanding Wayland frame callback on resume.
+            if reason==Some(Reason::PoweredOff) || (reason.is_some() && screen.last_frame.is_some()) { continue; }
+            if !screen.ready || !benchmark.should_present(screen.last_frame) { continue; }
             let r=screen.render.as_ref().context("Surface not configured")?;
             let key=RenderKey::new(&r.config,id,share);
             let group=pool.get_mut(&key).context("Missing render group")?;
@@ -440,6 +471,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
         if benchmark.active() {stats.report(benchmark,&state);}
         event_loop.dispatch(timeout,&mut state).context("Dispatch Wayland events")?;
     }
+    running.store(false,Ordering::SeqCst);
     state.surfaces.clear();
     connection.flush().context("Flush Wayland cleanup")?;
     Ok(())
@@ -465,7 +497,7 @@ fn reconcile_outputs(state:&mut Desktop,qh:&QueueHandle<Desktop>,selected:Option
         if surface.version()>=3 { surface.set_buffer_scale(scale); }
         surface.commit();
         eprintln!("Attached output {} (surface {})",output.name.as_deref().unwrap_or("unnamed"),id);
-        state.surfaces.insert(id,Screen {render:None,role:Role::Layer(layer),surface,logical:(1,1),scale,pending:true,configured:false,ready:true,closed:false,last_frame:None});
+        state.surfaces.insert(id,Screen {render:None,role:Role::Layer(layer),surface,logical:(1,1),scale,pending:true,configured:false,ready:true,closed:false,last_frame:None,suspended:None});
     }
 }
 fn make_surface(instance:&wgpu::Instance,connection:&Connection,surface:&wl_surface::WlSurface)->Result<wgpu::Surface<'static>> {
