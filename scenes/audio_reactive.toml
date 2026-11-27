@@ -17,13 +17,13 @@ center = [0.5, 0.5]
 size = [0.48, 0.48]
 outline = 0.025
 color = "#71c4e8"
-opacity = 0.4
+opacity = 0
 [layers.shapes.audio]
 signal = "bass"
-size = 0.25
-opacity = 0.4
-attack = 0.015
-decay = 0.15
+size = 0.4
+opacity = 1
+attack = 0.005
+decay = 0.08
 
 [[layers]]
 name = "bass ring"
@@ -47,12 +47,12 @@ name = "rotating polygon"
 [[layers.effects]]
 kind = "glitch"
 intensity = 0.0
-period = 0.2
+period = 3
 [layers.effects.audio]
 signal = "bass"
 intensity = 0.25
-attack = 0.005
-decay = 0.08
+attack = 0.0
+decay = 0.008
 [[layers.shapes]]
 kind = "polygon"
 sides = 3
