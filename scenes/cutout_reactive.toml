@@ -21,7 +21,7 @@ sensitivity = 1.0
 name = "background_shapes"
 opacity = 1.0
 background = "#00000000"
-effects = [{ kind = "glitch", intensity = 0.35, period = 48.0, pulse = 0.6, audio = { signal = "kick_strength", intensity = 0.55, attack = 0.005, decay = 0.10 } }]
+effects = [{ kind = "glitch", intensity = 0.35, period = 48.0, pulse = 0.6, audio = { signal = "kick_strength", intensity = 0.20, attack = 0.012, decay = 0.12 } }]
 
 
 [[layers.shapes]]
@@ -157,7 +157,7 @@ background = "#a8a8a8"
 effects = [
     { kind = "grid", intensity= 1, period = 10, pulse = 0, offset = [120, 80], rotation = -2, spacing=48},
   { kind = "blur", intensity = 0.10, period = 10.0, pulse = 0.0 },
-  { kind = "glitch", intensity = 0.012, period = 18.0, pulse = 0.25, audio = { signal = "kick_strength", intensity = 0.06, attack = 0.005, decay = 0.10 } }
+  { kind = "glitch", intensity = 0.012, period = 18.0, pulse = 0.25, audio = { signal = "kick_strength", intensity = 0.025, attack = 0.012, decay = 0.12 } }
 ]
 
 [[layers.shapes]]
