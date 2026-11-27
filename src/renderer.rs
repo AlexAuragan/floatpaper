@@ -959,6 +959,9 @@ impl Renderer {
     pub fn set_text_paused(&mut self, paused: bool) { self.text_paused = paused; }
     pub fn update_command_text(&mut self, gpu: &Gpu, values: &crate::text_commands::Values) {
         let Some(sprites) = &mut self.sprites else { return; };
+        // Shared source + font + canvas yields identical pixels for glow and foreground.
+        // Retain only the most recent raster to bound temporary CPU storage.
+        let mut previous: Option<((String, Option<String>, u32, u32, u32, u32), crate::sprites::Raster)> = None;
         for (&(li,si), asset) in &mut sprites.commands {
             let shape = &self.scene.layers[li].shapes[si];
             let name = shape.text_source.as_ref().expect("command source");
@@ -969,11 +972,19 @@ impl Renderer {
             let Some(value) = value else { continue; };
             let mut shape = shape.clone();
             shape.text = Some(value.clone());
-            let result = crate::sprites::rasterize(&shape, Path::new("."), &mut sprites.fonts)
-                .and_then(|r| crate::sprites::fit_canvas(r, asset.width, asset.height));
-            match result {
-                Ok(mut raster) => {
-                    raster.premultiplied_linear_srgb();
+            let key = (name.clone(), shape.font_family.clone(), shape.font_size.to_bits(), shape.line_height.to_bits(), asset.width, asset.height);
+            if previous.as_ref().is_none_or(|(k, _)| *k != key) {
+                previous = None;
+                match crate::sprites::rasterize(&shape, Path::new("."), &mut sprites.fonts)
+                    .and_then(|r| crate::sprites::fit_canvas(r, asset.width, asset.height)) {
+                    Ok(mut raster) => {
+                        raster.premultiplied_linear_srgb();
+                        previous = Some((key, raster));
+                    }
+                    Err(e) => eprintln!("Text command {name}: cannot display output: {e:#}; using default (increase layout if needed)"),
+                }
+            }
+            if let Some((_, raster)) = &previous {
                     gpu.queue.write_texture(
                         wgpu::ImageCopyTexture { texture: &asset.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
                         &raster.rgba,
@@ -981,8 +992,6 @@ impl Renderer {
                         extent(asset.width, asset.height),
                     );
                     asset.valid = true;
-                }
-                Err(e) => eprintln!("Text command {name}: cannot display output: {e:#}; using default (increase layout if needed)"),
             }
         }
     }
