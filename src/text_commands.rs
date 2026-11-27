@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use std::{
     collections::BTreeMap, io::{Read, ErrorKind}, os::fd::AsRawFd,
     os::unix::process::CommandExt, path::{Path, PathBuf},
-    process::{Command, Stdio, Child}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    process::{Command, Stdio, Child}, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}},
     thread::{self, JoinHandle}, time::{Duration, Instant},
 };
 
@@ -15,13 +15,14 @@ pub type Values = BTreeMap<String, String>;
 pub struct Commands {
     active: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
     values: Arc<Mutex<Values>>,
     workers: Vec<JoinHandle<()>>,
 }
 impl Commands {
     pub fn new(scene: &Scene, base: &Path, allowed: bool) -> Result<Self> {
         let mut this = Self { active: Arc::new(AtomicBool::new(false)), stop: Arc::new(AtomicBool::new(false)),
-            values: Arc::new(Mutex::new(BTreeMap::new())), workers: Vec::new() };
+            generation: Arc::new(AtomicU64::new(0)), values: Arc::new(Mutex::new(BTreeMap::new())), workers: Vec::new() };
         if !allowed {
             if scene.has_commands() { eprintln!("Command text disabled: using defaults. Pass --allow-commands only for trusted scenes."); }
             return Ok(this);
@@ -36,11 +37,15 @@ impl Commands {
             let base = base.to_path_buf();
             let active = this.active.clone();
             let stop = this.stop.clone();
+            let generation = this.generation.clone();
             let values = this.values.clone();
             this.workers.push(thread::Builder::new().name("floatpaper-text".into()).spawn(move || {
                 let mut due = Instant::now();
                 let mut last_error = None;
+                let mut observed = generation.load(Ordering::Acquire);
                 while !stop.load(Ordering::Acquire) {
+                    let epoch = generation.load(Ordering::Acquire);
+                    if epoch != observed { observed = epoch; due = Instant::now(); }
                     if !active.load(Ordering::Acquire) {
                         due = Instant::now();
                         thread::park();
@@ -48,9 +53,9 @@ impl Commands {
                     }
                     if Instant::now() < due { thread::park_timeout(due.saturating_duration_since(Instant::now())); continue; }
                     let start = Instant::now();
-                    let result = execute(&command, &base, timeout, || !active.load(Ordering::Acquire) || stop.load(Ordering::Acquire));
+                    let result = execute(&command, &base, timeout, || !active.load(Ordering::Acquire) || stop.load(Ordering::Acquire) || generation.load(Ordering::Acquire) != epoch);
                     let mut map = values.lock().expect("command values mutex poisoned");
-                    if !active.load(Ordering::Acquire) || stop.load(Ordering::Acquire) {
+                    if !active.load(Ordering::Acquire) || stop.load(Ordering::Acquire) || generation.load(Ordering::Acquire) != epoch {
                         map.remove(&name);
                     } else {
                         match result {
@@ -73,6 +78,7 @@ impl Commands {
     }
     pub fn set_active(&self, active: bool) {
         let previous = self.active.swap(active, Ordering::AcqRel);
+        if previous != active { self.generation.fetch_add(1, Ordering::AcqRel); }
         if previous && !active { self.values.lock().expect("command values mutex poisoned").clear(); }
         if previous != active { for worker in &self.workers { worker.thread().unpark(); } }
     }
