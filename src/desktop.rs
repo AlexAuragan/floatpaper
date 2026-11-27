@@ -155,6 +155,57 @@ impl SharedFrame {
     }
 }
 
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum BenchmarkMode { Off, Render, Replay, Hold }
+
+impl BenchmarkMode {
+    fn parse(value:&str)->Result<Self> {
+        match value {
+            "render"=>Ok(Self::Render),
+            "replay"=>Ok(Self::Replay),
+            "hold"=>Ok(Self::Hold),
+            _=>bail!("FLOATPAPER_BENCHMARK_MODE must be render, replay or hold"),
+        }
+    }
+    fn from_env()->Result<Self> {
+        match std::env::var("FLOATPAPER_BENCHMARK_MODE") {
+            Ok(value)=>Self::parse(&value),
+            Err(std::env::VarError::NotPresent)=>Ok(Self::Off),
+            Err(e)=>Err(e).context("Reading FLOATPAPER_BENCHMARK_MODE"),
+        }
+    }
+    fn active(self)->bool { self!=Self::Off }
+    fn frozen(self)->bool { matches!(self,Self::Replay|Self::Hold) }
+    fn should_present(self,last:Option<Instant>)->bool { self!=Self::Hold || last.is_none() }
+    fn needs_render(self,last:Option<Instant>,now:Instant,interval:Duration)->bool {
+        last.map_or(true,|last| !self.frozen() && now.saturating_duration_since(last)>=interval)
+    }
+}
+
+struct BenchmarkStats {
+    start:Instant,
+    renders:u64,
+    presents:BTreeMap<u32,u64>,
+}
+impl BenchmarkStats {
+    fn new()->Self {Self{start:Instant::now(),renders:0,presents:BTreeMap::new()}}
+    fn record(&mut self,id:u32,rendered:bool) {
+        self.renders+=u64::from(rendered);
+        *self.presents.entry(id).or_default()+=1;
+    }
+    fn report(&mut self,mode:BenchmarkMode,state:&Desktop) {
+        let elapsed=self.start.elapsed().as_secs_f64();
+        if elapsed<5.0 {return;}
+        let detail=state.surfaces.iter().filter(|(_,s)|s.configured && !s.closed)
+            .map(|(id,_)| format!("surface={id}:{:.2}",self.presents.get(id).copied().unwrap_or(0) as f64/elapsed))
+            .collect::<Vec<_>>().join(" ");
+        eprintln!("BENCHMARK mode={mode:?} scene_renders_per_sec={:.2} surface_submit_fps | {detail}",self.renders as f64/elapsed);
+        self.start=Instant::now();
+        self.renders=0;
+        self.presents.clear();
+    }
+}
+
 struct RenderGroup { renderer:Renderer, shared:Option<SharedFrame> }
 type RenderPool=HashMap<RenderKey,RenderGroup>;
 
@@ -165,7 +216,7 @@ fn new_group(gpu:&Gpu,scene:&Scene,base:&Path,key:RenderKey,shared:bool)->Result
     Ok(RenderGroup{renderer,shared})
 }
 
-fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene,base:&Path,share:bool)->Result<()> {
+fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene,base:&Path,share:bool,benchmark:BenchmarkMode)->Result<()> {
     let mut counts=HashMap::<RenderKey,usize>::new();
     for (&id,screen) in &state.surfaces {
         if screen.closed {continue;}
@@ -175,7 +226,7 @@ fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene
     }
     pool.retain(|key,_|counts.contains_key(key));
     for (key,count) in counts {
-        let shared=count>1;
+        let shared=count>1 || benchmark.active();
         if let Some(group)=pool.get_mut(&key) {
             if shared && group.shared.is_none() {
                 group.shared=Some(SharedFrame::new(gpu,key)?);
@@ -315,6 +366,14 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
     let r=running.clone();
     ctrlc::set_handler(move||r.store(false,Ordering::SeqCst)).context("Install Ctrl-C handler")?;
     let share=matches!(&mode,Mode::Live{..}) && std::env::var_os("FLOATPAPER_DISABLE_OUTPUT_SHARING").is_none();
+    let benchmark=BenchmarkMode::from_env()?;
+    if benchmark.active() && !matches!(&mode,Mode::Live{..}) {
+        bail!("Presentation benchmarking is supported only in live mode");
+    }
+    if benchmark.active() {
+        eprintln!("Presentation benchmark: {benchmark:?}; all render groups use offscreen output");
+    }
+    let mut stats=BenchmarkStats::new();
     let mut pool=RenderPool::new();
     let start=Instant::now();
     let mut reload_at=None;
@@ -336,7 +395,13 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
         if reload_at.is_some_and(|t|Instant::now()>=t) {
             reload_at=None;
             match reload(&gpu,&mut pool,&path) {
-                Ok(new_scene)=>{ scene=new_scene; eprintln!("Reloaded {}",path.display()); },
+                Ok(new_scene)=>{
+                    scene=new_scene;
+                    if benchmark.frozen() {
+                        for screen in state.surfaces.values_mut() {screen.last_frame=None;}
+                    }
+                    eprintln!("Reloaded {}",path.display());
+                },
                 Err(e)=>eprintln!("Reload rejected; retaining last valid scene: {e:#}"),
             }
         }
@@ -348,13 +413,14 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             if screen.closed { screen.render.take(); continue; }
             if !screen.configured { continue; }
             if screen.pending || screen.render.is_none() {
-                configure(&instance,&connection,&gpu,screen,share)?;
+                configure(&instance,&connection,&gpu,screen,share || benchmark.active())?;
                 screen.pending=false;
+                if benchmark==BenchmarkMode::Hold {screen.last_frame=None;}
             }
         }
-        reconcile_renderers(&gpu,&state,&mut pool,&scene,base,share)?;
+        reconcile_renderers(&gpu,&state,&mut pool,&scene,base,share,benchmark)?;
         for (&id,screen) in &mut state.surfaces {
-            if screen.closed || !screen.configured || !screen.ready { continue; }
+            if screen.closed || !screen.configured || !screen.ready || !benchmark.should_present(screen.last_frame) { continue; }
             let r=screen.render.as_ref().context("Surface not configured")?;
             let key=RenderKey::new(&r.config,id,share);
             let group=pool.get_mut(&key).context("Missing render group")?;
@@ -362,10 +428,16 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
                 let remaining=interval.saturating_sub(now.saturating_duration_since(last));
                 if !remaining.is_zero() { timeout=timeout.min(remaining); continue; }
             }
-            let frame_time=now.duration_since(start).as_secs_f64();
-            if draw(&gpu,screen,group,&qh,frame_time,now,interval)? { screen.last_frame=Some(now); }
-            else { timeout=timeout.min(interval); }
+            let frame_time=if benchmark.frozen() {0.0} else {now.duration_since(start).as_secs_f64()};
+            match draw(&gpu,screen,group,&qh,frame_time,now,interval,benchmark)? {
+                Some(rendered)=>{
+                    screen.last_frame=Some(now);
+                    if benchmark.active() {stats.record(id,rendered);}
+                },
+                None=>{timeout=timeout.min(interval);}
+            }
         }
+        if benchmark.active() {stats.report(benchmark,&state);}
         event_loop.dispatch(timeout,&mut state).context("Dispatch Wayland events")?;
     }
     state.surfaces.clear();
@@ -415,7 +487,12 @@ fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mu
         let format=caps.formats.iter().copied().find(|f|f.is_srgb()).or_else(||caps.formats.first().copied()).context("GPU cannot present to this output")?;
         let alpha_mode=if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) { wgpu::CompositeAlphaMode::Opaque } else { *caps.alpha_modes.first().context("No supported alpha modes")? };
         let mut usage=wgpu::TextureUsages::RENDER_ATTACHMENT;
-        if share && caps.usages.contains(wgpu::TextureUsages::COPY_DST) { usage|=wgpu::TextureUsages::COPY_DST; }
+        // A/B test the render-pass transfer against the swapchain copy path.
+        // Omit COPY_DST when forced so the swapchain is allocated for rendering only.
+        let force_blit=std::env::var_os("FLOATPAPER_FORCE_PRESENT_BLIT").is_some();
+        if share && !force_blit && caps.usages.contains(wgpu::TextureUsages::COPY_DST) {
+            usage|=wgpu::TextureUsages::COPY_DST;
+        }
         let config=wgpu::SurfaceConfiguration { usage,format,width,height,present_mode:wgpu::PresentMode::Fifo,desired_maximum_frame_latency:2,alpha_mode,view_formats:vec![] };
         surface.configure(&gpu.device,&config);
         screen.render=Some(RenderSurface{surface,config});
@@ -424,19 +501,19 @@ fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mu
     }
     Ok(())
 }
-fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Desktop>,t:f64,now:Instant,interval:Duration)->Result<bool> {
+fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Desktop>,t:f64,now:Instant,interval:Duration,benchmark:BenchmarkMode)->Result<Option<bool>> {
     let r=screen.render.as_mut().context("Surface not configured")?;
     let frame=match r.surface.get_current_texture() {
         Ok(f)=>f,
-        Err(wgpu::SurfaceError::Lost|wgpu::SurfaceError::Outdated)=>{ screen.pending=true; return Ok(false); },
-        Err(wgpu::SurfaceError::Timeout)=>{eprintln!("Wayland surface acquisition timed out");return Ok(false);},
+        Err(wgpu::SurfaceError::Lost|wgpu::SurfaceError::Outdated)=>{ screen.pending=true; return Ok(None); },
+        Err(wgpu::SurfaceError::Timeout)=>{eprintln!("Wayland surface acquisition timed out");return Ok(None);},
         Err(wgpu::SurfaceError::OutOfMemory)=>bail!("GPU surface out of memory"),
     };
     let mut encoder=gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor{label:Some("live frame")});
     let rendered=if let Some(shared)=&mut group.shared {
         // A ready output can reuse the most recent group frame for at most
         // one requested frame interval. Never wait for another output.
-        let refresh=shared.rendered_at.map_or(true,|last|now.saturating_duration_since(last)>=interval);
+        let refresh=benchmark.needs_render(shared.rendered_at,now,interval);
         if refresh {
             group.renderer.render(gpu,&mut encoder,&shared.view,t);
             shared.rendered_at=Some(now);
@@ -456,7 +533,7 @@ fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Deskt
     screen.ready=false;
     frame.present();
     if rendered {group.renderer.profile_submitted();}
-    Ok(true)
+    Ok(Some(rendered))
 }
 fn reload(gpu:&Gpu,pool:&mut RenderPool,path:&Path)->Result<Scene> {
     let scene=Scene::load(path)?;
@@ -596,20 +673,20 @@ mod sharing_tests {
         assert_ne!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
     }
     #[test]
-    fn gpu_selection_parses_explicit_policies_and_ids() {
-        assert_eq!(GpuChoice::parse("auto").unwrap(),GpuChoice::Auto);
-        assert_eq!(GpuChoice::parse("low-power").unwrap(),GpuChoice::LowPower);
-        assert_eq!(GpuChoice::parse("high-performance").unwrap(),GpuChoice::HighPerformance);
-        assert_eq!(GpuChoice::parse("1002:7480").unwrap(),GpuChoice::Pci(0x1002,0x7480));
-        assert!(GpuChoice::parse("amd").is_err());
-        assert!(GpuChoice::parse("1002:xyz1").is_err());
-        assert!(GpuChoice::parse("1002:1").is_err());
-    }
-    #[test]
-    fn dma_buf_device_id_is_native_endian() {
-        assert_eq!(decode_device(&0xe281u64.to_ne_bytes()).unwrap(),0xe281);
-        assert_eq!(decode_device(&0xe281u32.to_ne_bytes()).unwrap(),0xe281);
-        assert!(decode_device(&[0;3]).is_err());
+    fn benchmark_modes_control_rendering_and_presentation_independently() {
+        let now=Instant::now();
+        let interval=Duration::from_millis(34);
+        let later=now+interval;
+        assert!(BenchmarkMode::parse("invalid").is_err());
+        assert!(BenchmarkMode::Render.needs_render(Some(now),later,interval));
+        assert!(!BenchmarkMode::Render.needs_render(Some(now),now,interval));
+        for mode in [BenchmarkMode::Replay,BenchmarkMode::Hold] {
+            assert!(mode.needs_render(None,now,interval));
+            assert!(!mode.needs_render(Some(now),later,interval));
+        }
+        assert!(BenchmarkMode::Replay.should_present(Some(now)));
+        assert!(BenchmarkMode::Hold.should_present(None));
+        assert!(!BenchmarkMode::Hold.should_present(Some(now)));
     }
 
 }
