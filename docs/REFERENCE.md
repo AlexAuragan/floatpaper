@@ -117,11 +117,12 @@ color = "#b7dce8"
 
 Sequences preload their textures, support blank frames, and snap their cycle to the scene loop when configured. Commands execute once per referenced source, not per shape or monitor. Arguments are passed directly to the program; the working directory is the scene directory. Stdout must be UTF-8 and at most 16384 bytes. Timeouts, unsuccessful exits and invalid/oversized output use the default. The optional layout string reserves a fixed text canvas; output exceeding that canvas also falls back. Text rasterization occurs only when the output changes.
 
-**Security:** commands are disabled unless you explicitly pass `--allow-commands` to preview or live. This grants the scene (including hot-reloaded edits) command execution with your user privileges. Only use it with trusted scene files and scripts. There is no sandbox. Manual pause displays defaults on the final visible frame and stops command polling; all-hidden suspension also stops polling. MP4 export never runs commands, warns, and uses defaults; sequences remain animated.
+**Security:** command text is disabled until you explicitly run `floatpaper trust <scene>`. Authorization is stored under `$XDG_CONFIG_HOME/floatpaper/trusted-scenes.json` (default `~/.config/floatpaper/trusted-scenes.json`) in a private directory/file. Trust matches the canonical scene path and exact named command argument lists, including on hot reload; visual edits do not require reauthorization. New or changed command declarations disable command execution until trusted again and reloaded. Commands run with your user privileges, without a sandbox. Trust also requires trusting the scripts, executables and environment they use; script contents are not pinned. `floatpaper untrust <scene>` revokes authorization on next launch or reload, not immediately in an already running process. Manual pause displays defaults and stops polling; all-hidden suspension also stops polling. MP4 export never executes commands.
 
 ```sh
 bash scenes/scripts/telemetry.sh
-cargo run --release -- preview scenes/spaceship_telemetry.toml --allow-commands
+cargo run --release -- trust scenes/spaceship_telemetry.toml
+cargo run --release -- preview scenes/spaceship_telemetry.toml
 ```
 
 The demo script reads Linux procfs and sysfs. GPU utilization is the maximum available AMD GPU busy percentage, and temperature is the highest exposed Intel/AMD CPU package/control temperature. Missing sensors display `--`. The demo is separate from `spaceship_loading.toml`.
@@ -155,7 +156,7 @@ During preview or live mode, the scene directory and initially referenced extern
 
 ## Audio reactivity
 
-Enable audio per scene and authorize capture at launch:
+Enable playback audio per scene (no CLI flag needed):
 
 ```toml
 [audio]
@@ -164,11 +165,11 @@ sensitivity = 1.0
 ```
 
 ```sh
-floatpaper preview scenes/audio_reactive.toml --allow-audio
+floatpaper preview scenes/audio_reactive.toml
 floatpaper audio-test --sensitivity 1.0
 ```
 
-Requires `parec` (Arch package `libpulse`) and a running PulseAudio-compatible server. Preview/live capture the default playback monitor, not the default microphone. The diagnostic accepts an optional `--target` source. Sensitivity is 0.25..4 (default 1). Audio is local PCM, not saved to disk. One capture worker serves all outputs. Without permission or on capture failure, reactive values are zero; capture failures are retried. Manual pause, all-hidden suspension and frozen benchmark modes stop capture. MP4 export uses zero audio signals and does not capture sound.
+Requires `parec` (Arch package `libpulse`) and a running PulseAudio-compatible server. Preview/live capture the default playback monitor, not the default microphone. The diagnostic accepts an optional `--target` source. Sensitivity is 0.25..4 (default 1). Audio is local PCM, not saved to disk. One capture worker serves all outputs. When disabled or on capture failure, reactive values are zero; capture failures are retried. Manual pause, all-hidden suspension and frozen benchmark modes stop capture. MP4 export uses zero audio signals and does not capture sound.
 
 ### Shape and effect modulation
 
