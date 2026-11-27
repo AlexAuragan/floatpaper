@@ -19,6 +19,10 @@ size = [0.006,0.006]
 size_jitter = 0.65
 color = "#529dbb"
 opacity = 0.12
+motion = "wrap"
+wrap_left = true
+radius = [0.0, 0.0]
+period = 180.0
 
 [[layers.shapes]]
 kind = "circle"
@@ -29,9 +33,10 @@ size = [0.0025,0.0025]
 size_jitter = 0.7
 color = "#c8e8f7"
 opacity = 0.48
-motion = "drift"
-radius = [0.008,0.012]
-period = 30.0
+motion = "wrap"
+wrap_left = true
+radius = [0.0, 0.0]
+period = 90.0
 pulse = 0.3
 
 [[layers]]
