@@ -21,6 +21,13 @@ pub struct Signals {
     pub volume: f32,
     pub onset_strength: f32,
     pub kick_strength: f32,
+    // Instantaneous log spectral flux and the threshold for that same hop.
+    pub onset_flux: f32,
+    pub kick_flux: f32,
+    pub onset_threshold: f32,
+    pub kick_threshold: f32,
+    pub onset_linear_flux: f32,
+    pub kick_linear_flux: f32,
     pub onset_count: u64,
     pub kick_count: u64,
 }
@@ -35,6 +42,7 @@ struct Peaks {
     mean: f32,
     older: f32,
     previous: f32,
+    previous_amplitude: f32,
     threshold: f32,
     previous_audible: bool,
     cooldown: f32,
@@ -43,24 +51,35 @@ struct Peaks {
     count: u64,
 }
 impl Peaks {
-    fn update(&mut self, flux: f32, audible: bool, sensitivity: f32) -> f32 {
+    fn update(&mut self, flux: f32, amplitude: f32, audible: bool, sensitivity: f32) -> f32 {
         self.cooldown = (self.cooldown - DT).max(0.);
         self.envelope *= (-DT / 0.15).exp();
         if self.cooldown == 0. && self.previous_audible
             && self.previous > self.older && self.previous >= flux
             && self.previous > self.threshold {
-            self.strength = (self.previous / self.threshold.max(0.002) / 4.0).clamp(0.15, 1.0);
+            // The adaptive threshold decides whether an event occurred, never
+            // its visual amplitude. Use uncompressed positive magnitude flux
+            // with a fixed saturating mapping (no running gain normalization).
+            self.strength = impact_strength(self.previous_amplitude, sensitivity);
             self.envelope = 1.;
             self.count += 1;
             self.cooldown = 0.09;
         }
         self.older = self.previous;
         self.previous = flux;
+        self.previous_amplitude = amplitude;
         self.previous_audible = audible;
         self.threshold = (1.5 * self.mean + 0.002) / sensitivity.sqrt();
         self.mean += (1. - (-DT / 0.4).exp()) * (flux - self.mean);
         self.envelope
     }
+}
+
+// Fixed half-saturation point in normalized PCM magnitude units.
+// This is a visual gain choice, not part of the onset detection algorithm.
+fn impact_strength(amplitude: f32, sensitivity: f32) -> f32 {
+    let x = amplitude * sensitivity;
+    x / (x + 0.02)
 }
 
 struct Analyzer {
@@ -70,6 +89,7 @@ struct Analyzer {
     history: [f32; WINDOW],
     window: [f32; WINDOW],
     previous: [f32; BINS],
+    previous_magnitude: [f32; BINS],
     filled: usize,
     onset: Peaks,
     kick: Peaks,
@@ -83,7 +103,7 @@ impl Analyzer {
         Self { fft, scratch, spectrum: vec![Complex32::default(); WINDOW],
             history: [0.; WINDOW],
             window: std::array::from_fn(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / WINDOW as f32).cos()),
-            previous: [0.; BINS], filled: 0, onset: Peaks::default(), kick: Peaks::default(),
+            previous: [0.; BINS], previous_magnitude: [0.; BINS], filled: 0, onset: Peaks::default(), kick: Peaks::default(),
             sensitivity, signals: Signals::default() }
     }
     fn process(&mut self, samples: &[f32; BLOCK]) -> Signals {
@@ -98,8 +118,10 @@ impl Analyzer {
         self.fft.process_with_scratch(&mut self.spectrum, &mut self.scratch);
         let mut energy = [0.; 3];
         let mut flux = [0.; 3];
+        let mut linear_flux = [0.; 3];
         let mut counts = [0usize; 3];
         let mut kick_flux = 0.;
+        let mut kick_linear_flux = 0.;
         let mut kick_bins = 0;
         let mut kick_energy = 0.;
         for k in 1..BINS-1 {
@@ -111,12 +133,16 @@ impl Analyzer {
             let compressed = (1. + 100. * magnitude).ln();
             let change = (compressed - self.previous[k]).max(0.);
             self.previous[k] = compressed;
+            let linear_change = (magnitude - self.previous_magnitude[k]).max(0.);
+            self.previous_magnitude[k] = magnitude;
             let band = if hz < 200. { 0 } else if hz < 2500. { 1 } else { 2 };
             energy[band] += power;
             flux[band] += change;
+            linear_flux[band] += linear_change * linear_change;
             counts[band] += 1;
             if hz <= 150. {
                 kick_flux += change;
+                kick_linear_flux += linear_change * linear_change;
                 kick_energy += power;
                 kick_bins += 1;
             }
@@ -128,8 +154,16 @@ impl Analyzer {
         let novelty = (0..3).map(|i| flux[i] / counts[i] as f32).sum::<f32>() / 3.;
         let kick_novelty = kick_flux / kick_bins as f32;
         let ready = self.filled == WINDOW;
-        self.signals.onset = self.onset.update(novelty, ready && volume > 0.003, self.sensitivity);
-        self.signals.kick = self.kick.update(kick_novelty, ready && kick_energy.sqrt() > 0.003, self.sensitivity);
+        let onset_amplitude = linear_flux.iter().sum::<f32>().sqrt();
+        let kick_amplitude = kick_linear_flux.sqrt();
+        self.signals.onset = self.onset.update(novelty, onset_amplitude, ready && volume > 0.003, self.sensitivity);
+        self.signals.kick = self.kick.update(kick_novelty, kick_amplitude, ready && kick_energy.sqrt() > 0.003, self.sensitivity);
+        self.signals.onset_flux = novelty;
+        self.signals.kick_flux = kick_novelty;
+        self.signals.onset_threshold = self.onset.threshold;
+        self.signals.kick_threshold = self.kick.threshold;
+        self.signals.onset_linear_flux = onset_amplitude;
+        self.signals.kick_linear_flux = kick_amplitude;
         self.signals.onset_strength = self.onset.strength;
         self.signals.kick_strength = self.kick.strength;
         self.signals.onset_count = self.onset.count;
@@ -148,6 +182,7 @@ impl Analyzer {
     fn reset(&mut self) {
         self.history.fill(0.);
         self.previous.fill(0.);
+        self.previous_magnitude.fill(0.);
         self.filled = 0;
         let (onsets,kicks) = (self.onset.count,self.kick.count);
         self.onset = Peaks { count: onsets, ..Peaks::default() };
@@ -337,11 +372,15 @@ pub fn diagnose(target: Option<String>, sensitivity: f32) -> Result<()> {
         result
     })?;
     eprintln!("Audio diagnostic: playback monitor, Ctrl-C to stop");
+    eprintln!("flux=log novelty/threshold; linear_flux=onset/kick; strength=decaying weighted impact");
     let mut last = (0,0);
     while running.load(Ordering::Acquire) {
         let s = *values.lock().expect("audio mutex poisoned");
-        println!("onset={:.2} kick={:.2} bass={:.2} mid={:.2} treble={:.2} volume={:.2} onsets={} kicks={}{}{}",
-            s.onset,s.kick,s.bass,s.mid,s.treble,s.volume,s.onset_count,s.kick_count,
+        println!("onset={:.2} kick={:.2} bass={:.2} mid={:.2} treble={:.2} volume={:.2} onset_strength={:.2} kick_strength={:.2} onset_flux={:.4}/{:.4} kick_flux={:.4}/{:.4} linear_flux={:.4}/{:.4} onsets={} kicks={}{}{}",
+            s.onset,s.kick,s.bass,s.mid,s.treble,s.volume,
+            s.onset*s.onset_strength,s.kick*s.kick_strength,
+            s.onset_flux,s.onset_threshold,s.kick_flux,s.kick_threshold,
+            s.onset_linear_flux,s.kick_linear_flux,s.onset_count,s.kick_count,
             if s.onset_count != last.0 { " ONSET" } else { "" },
             if s.kick_count != last.1 { " KICK" } else { "" });
         last = (s.onset_count,s.kick_count);
@@ -353,6 +392,21 @@ pub fn diagnose(target: Option<String>, sensitivity: f32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn impact_amplitude_is_independent_of_detection_threshold() {
+        let mut quiet = Peaks { previous: 0.2, previous_amplitude: 0.04, threshold: 0.01,
+            previous_audible: true, ..Peaks::default() };
+        let mut loud = Peaks { threshold: 0.15, ..Peaks {
+            previous: 0.2, previous_amplitude: 0.04, previous_audible: true, ..Peaks::default()
+        }};
+        quiet.update(0.0, 0.0, true, 1.0);
+        loud.update(0.0, 0.0, true, 1.0);
+        assert_eq!(quiet.count, 1);
+        assert_eq!(loud.count, 1);
+        assert_eq!(quiet.strength, loud.strength);
+        assert!(impact_strength(0.08, 1.0) > impact_strength(0.04, 1.0));
+        assert_eq!(impact_strength(0.0, 1.0), 0.0);
+    }
     #[test]
     fn silence_and_invalid_samples_are_safe() {
         let mut a = Analyzer::new(1.);
