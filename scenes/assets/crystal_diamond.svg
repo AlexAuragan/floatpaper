@@ -1,10 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
-<g stroke="#c9f5ff" stroke-width="1.5" stroke-linejoin="round">
-<path fill="#57b9ee" d="M102 48H218L290 120L160 278L30 120Z"/>
-<path fill="#b8f4ff" d="M102 48H218L190 120H130Z"/>
-<path fill="#6bd1f6" d="M102 48L130 120H30Z"/>
-<path fill="#459bdb" d="M218 48L290 120H190Z"/>
-<path fill="#2879bd" d="M30 120H130L160 278Z"/>
-<path fill="#154a89" d="M190 120H290L160 278Z"/>
-<path fill="#80d9fc" d="M130 120H190L160 278Z"/>
-</g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320"><g fill="none" stroke="white" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"><path d="M102 48H218L290 120L160 278L30 120Z"/><path d="M30 120H290 M102 48L130 120L160 278L190 120L218 48"/></g></svg>
