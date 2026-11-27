@@ -827,7 +827,7 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
     }
