@@ -115,6 +115,21 @@ pub enum Direction { #[default] Inward, Outward }
 pub struct Anchor {
     #[serde(default = "center_default")] pub center: [f32; 2],
 }
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unit { #[default] Relative, Px }
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin { TopLeft, TopCenter, TopRight, CenterLeft, #[default] Center, CenterRight, BottomLeft, BottomCenter, BottomRight }
+impl Origin {
+    fn point(self) -> [f32; 2] {
+        match self {
+            Self::TopLeft => [0.,0.], Self::TopCenter => [0.5,0.], Self::TopRight => [1.,0.],
+            Self::CenterLeft => [0.,0.5], Self::Center => [0.5,0.5], Self::CenterRight => [1.,0.5],
+            Self::BottomLeft => [0.,1.], Self::BottomCenter => [0.5,1.], Self::BottomRight => [1.,1.],
+        }
+    }
+}
 fn angle_spread_default() -> f64 { 360.0 }
 fn travel_default() -> [f32; 2] { [1.0, 0.0] }
 fn recycle_fade_default() -> f32 { 0.15 }
@@ -133,6 +148,11 @@ pub struct Shape {
     pub count: u32,
     #[serde(default = "center_default")]
     pub center: [f32; 2],
+    #[serde(default)] pub origin: Option<Origin>,
+    #[serde(default)] pub attachment: Option<Origin>,
+    #[serde(default)] pub position: Option<[f32; 2]>,
+    #[serde(default)] pub position_unit: Unit,
+    #[serde(default)] pub size_unit: Unit,
     #[serde(default)] pub anchor: Option<String>,
     #[serde(default)] pub anchor_offset: [f32; 2],
     #[serde(default)]
@@ -316,12 +336,20 @@ impl Scene {
                 if shape.count == 0 || !(3..=32).contains(&shape.sides) {
                     bail!("Invalid shape count or polygon sides");
                 }
+                if shape.position.is_some() || shape.origin.is_some() {
+                    if shape.anchor.is_some() || shape.center != center_default() { bail!("origin/position cannot be combined with anchor or nondefault center"); }
+                }
+                if let Some(p) = shape.position {
+                    let max = if matches!(shape.position_unit, Unit::Px) { 100000.0 } else { 100.0 };
+                    if !p.iter().all(|v| v.is_finite() && v.abs() <= max) { bail!("Invalid shape position"); }
+                }
+                let max_size = if matches!(shape.size_unit, Unit::Px) { 100000.0 } else { 10.0 };
                 if !shape
                     .size
                     .iter()
-                    .all(|v| v.is_finite() && *v > 0.0 && *v <= 10.0)
+                    .all(|v| v.is_finite() && *v > 0.0 && *v <= max_size)
                 {
-                    bail!("Shape sizes must be finite and in (0,10]");
+                    bail!("Shape sizes must be finite and positive, within the selected unit limit");
                 }
                 if !shape
                     .center
@@ -357,7 +385,11 @@ impl Scene {
         self.instances_for_aspect(t, 1.0)
     }
     pub fn instances_for_aspect(&self, t: f64, aspect: f32) -> Vec<LayerInstances> {
-        assert!(aspect.is_finite() && aspect > 0.0);
+        self.instances_for_viewport(t, aspect, 1.0, 1.0)
+    }
+    pub fn instances_for_viewport(&self, t: f64, width: f32, height: f32, pixel_scale: f32) -> Vec<LayerInstances> {
+        assert!(width > 0.0 && height > 0.0 && pixel_scale > 0.0);
+        let aspect = width / height;
         let t = self.time(t);
         self.layers
             .iter()
@@ -366,10 +398,19 @@ impl Scene {
                 let mut out = LayerInstances::default();
                 for (si, shape) in layer.shapes.iter().enumerate() {
                     let color = parse_color(&shape.color).expect("validated color");
-                    let center = match &shape.anchor {
+                    let origin = shape.origin.unwrap_or_default();
+                    let attachment = shape.attachment.unwrap_or(origin).point();
+                    let size = match shape.size_unit { Unit::Relative => shape.size, Unit::Px => [shape.size[0]*pixel_scale/height, shape.size[1]*pixel_scale/height] };
+                    let center = if shape.position.is_some() || shape.origin.is_some() {
+                        let p = origin.point();
+                        let mut offset = shape.position.unwrap_or([0.,0.]);
+                        if matches!(shape.position_unit, Unit::Px) { offset[0] *= pixel_scale/width; offset[1] *= pixel_scale/height; }
+                        // Positive offsets point inward from right/bottom edges.
+                        [p[0] + offset[0] * if p[0] == 1. { -1. } else { 1. }, p[1] + offset[1] * if p[1] == 1. { -1. } else { 1. }]
+                    } else { match &shape.anchor {
                         Some(name) => { let a = &self.anchors[name]; [a.center[0] + shape.anchor_offset[0], a.center[1] + shape.anchor_offset[1]] },
                         None => shape.center,
-                    };
+                    }};
                     for i in 0..shape.count {
                         let key = self.seed
                             ^ (li as u64).wrapping_mul(0xD6E8FEB86659FD93)
@@ -446,8 +487,16 @@ impl Scene {
                             // Shape index identifies the immutable texture within this layer.
                             ShapeKind::Svg | ShapeKind::Text => (3., si as f32),
                         };
+                        let sx = size[0] * scale;
+                        let sy = size[1] * scale;
+                        let dx = (0.5 - attachment[0]) * sx;
+                        let dy = (0.5 - attachment[1]) * sy;
+                        // Rotate around the selected attachment, not the quad center.
+                        let (sin, cos) = angle.sin_cos();
+                        x += (dx * cos as f32 - dy * sin as f32) / aspect;
+                        y += dx * sin as f32 + dy * cos as f32;
                         let instance = Instance {
-                            center_size: [x, y, shape.size[0] * scale, shape.size[1] * scale],
+                            center_size: [x, y, sx, sy],
                             color: [color[0], color[1], color[2], alpha],
                             params: [angle.rem_euclid(TAU) as f32, kind, sides, if matches!(shape.kind, ShapeKind::Ray) { shape.glow } else if shape.preserve_color { 1.0 } else { shape.outline }],
                         };
@@ -662,6 +711,27 @@ align_to_motion = true
         assert_eq!(s.instances_for_aspect(0.0, 2.0)[0].over[0].color[3], 0.0);
         let end = s.instances_for_aspect(12.5, 2.0);
         assert_eq!(bytemuck::cast_slice::<Instance,u8>(&a[0].over), bytemuck::cast_slice::<Instance,u8>(&end[0].over));
+    }
+    #[test]
+    fn pixel_layout_keeps_edge_margins_at_different_resolutions_and_scales() {
+        let s: Scene = toml::from_str(r#"
+[[layers]]
+name = "HUD"
+[[layers.shapes]]
+kind = "rectangle"
+origin = "top_right"
+position = [50.0, 40.0]
+position_unit = "px"
+size = [240.0, 60.0]
+size_unit = "px"
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
+        for (w,h,scale) in [(1920.,1080.,1.),(1440.,2560.,1.),(3840.,2160.,2.)] {
+            let a = s.instances_for_viewport(0.,w,h,scale)[0].over[0].center_size;
+            assert!((a[0]*w + a[2]*h/2. - (w-50.*scale)).abs() < 0.001);
+            assert!((a[1]*h - a[3]*h/2. - 40.*scale).abs() < 0.001);
+            assert!((a[2]*h - 240.*scale).abs() < 0.001);
+        }
     }
     #[test]
     fn scene_repeats() {
