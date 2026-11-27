@@ -189,6 +189,38 @@ Live outputs with matching physical buffer dimensions and surface texture format
 
 Render groups are rebuilt/reconciled on output size changes, hotplug, or successful scene reload; unused groups are released. Set `FLOATPAPER_DISABLE_OUTPUT_SHARING=1` to restore independent live rendering. The profiler labels shared-mode renderers by group dimensions and format, and reports unique rendered frames (not the number of surface presentations). Shared-frame transfers are outside its measured effect-pass durations, so compare actual GPU utilization with profiling disabled too.
 
+## Manual wallpaper pause / resume (live)
+
+While a live instance is running, invoke any of these commands from the same Wayland session:
+
+```sh
+floatpaper pause
+floatpaper resume
+floatpaper toggle
+floatpaper status
+```
+
+Each command prints `paused` or `running` after the render loop acknowledges it. Pause and resume are idempotent. Manual pause retains each output's last buffer and stops routine frame submissions, freezing the logical animation clock so resume continues without a time jump. New or reconfigured outputs can receive one frame while paused. Automatic fullscreen/DPMS suspension remains independent: manually resuming does not override a hidden output. Scene edits take effect on resume (or when an output needs its initial frame). Preview and export are unaffected.
+
+The control socket lives in `XDG_RUNTIME_DIR` and is scoped by the basename of `WAYLAND_DISPLAY` (default `wayland-0`). One controlled live process per display is supported; launch additional independent processes with `FLOATPAPER_DISABLE_CONTROL=1` if needed. Those processes do not respond to control commands. An advisory file lock protects the socket against conflicting instances and permits cleanup after a crash. Runtime controls require Rust 1.89 or newer for the standard library file-lock API; no new dependency is needed.
+
+### Waybar button
+
+Install the built binary somewhere on Waybar's PATH (or use an absolute path in the configuration). Add `custom/floatpaper` to your `modules-left`, `modules-center` or `modules-right` list, and add the following module to your Waybar JSONC config:
+
+```jsonc
+"custom/floatpaper": {
+    "exec": "floatpaper status",
+    "format": "Wallpaper: {}",
+    "interval": 2,
+    "on-click": "floatpaper toggle",
+    "exec-on-event": true,
+    "tooltip": false
+}
+```
+
+Click to toggle between running and paused. The status is the manual pause state, not the per-monitor visibility suspension state. A missing live instance causes the CLI to return a nonzero exit status rather than falsely reporting that it is running.
+
 ## Experimental visibility suspension (Hyprland live)
 
 Set `FLOATPAPER_SUSPEND_HIDDEN=1` to suspend wallpaper rendering and presentation independently on outputs that Hyprland reports as powered off or covered by a mapped, non-hidden true fullscreen client on the active workspace. Maximized clients, inactive workspaces and outputs with a special workspace open are not treated as hidden. Floatpaper retains the last buffer and continues its logical animation clock; it resumes at the current animation time, respecting Wayland frame callbacks. Other outputs remain independent. Preview and export are unchanged.
