@@ -29,6 +29,7 @@ pulse = 0.65
 
 [[layers]]
 name = "deep crystal veins"
+effects = [{ kind = "custom", shader = "../shaders/material_crystal.wgsl", intensity = 0.3, spacing = 130, rotation = -135, color = "#39749f" }]
 [[layers.shapes]]
 kind = "svg"
 path = "assets/crystal_cluster_deep.svg"
@@ -177,7 +178,7 @@ effects = [
 ]
 [[layers.shapes]]
 kind = "svg"
-path = "assets/cave_rim_deep_textured.svg"
+path = "assets/cave_rim_deep_soft.svg"
 center = [0.5,0.5]
 size = [1.65,0.93]
 color = "#ffffff"
@@ -186,6 +187,7 @@ raster_size = 1536
 
 [[layers]]
 name = "crystal veins"
+effects = [{ kind = "custom", shader = "../shaders/material_crystal.wgsl", intensity = 0.45, spacing = 105, rotation = -135, color = "#6ba9d8" }]
 
 [[layers.shapes]]
 kind = "svg"
@@ -372,7 +374,7 @@ effects = [
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/cave_rim_middle_textured.svg"
+path = "assets/cave_rim_middle_soft.svg"
 center = [0.5,0.5]
 size = [2.65,1.49]
 color = "#ffffff"
@@ -381,6 +383,7 @@ raster_size = 1536
 
 [[layers]]
 name = "foreground crystals"
+effects = [{ kind = "custom", shader = "../shaders/material_crystal.wgsl", intensity = 0.65, spacing = 85, rotation = -135, color = "#a0e1ff" }]
 
 [[layers.shapes]]
 kind = "svg"
@@ -511,7 +514,7 @@ effects = [
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/cave_rim_near_textured.svg"
+path = "assets/cave_rim_near_soft.svg"
 center = [0.5,0.5]
 size = [3.05,1.72]
 color = "#ffffff"
