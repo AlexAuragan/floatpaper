@@ -1,4 +1,5 @@
 mod scene;
+mod audio;
 mod sprites;
 mod text_commands;
 mod renderer;
@@ -17,6 +18,8 @@ struct Cli { #[command(subcommand)] command: Action }
 
 #[derive(Subcommand)]
 enum Action {
+    /// Inspect live playback audio signals (requires parec, no GPU).
+    AudioTest { #[arg(long)] target: Option<String>, #[arg(long, default_value_t = 1.0)] sensitivity: f32 },
     /// Check configuration and animation parameters (no GPU required).
     Validate { scene: PathBuf },
     /// Open a normal Wayland window for scene development.
@@ -46,6 +49,7 @@ enum Action {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Action::AudioTest { target, sensitivity } => audio::diagnose(target, sensitivity),
         Action::Validate { scene: path } => {
             let scene = scene::Scene::load(&path)?;
             println!("Valid scene: {} layers, {} shapes, {} fps, loop {:?} s", scene.layers.len(), scene.shape_count(), scene.fps, scene.loop_seconds);
