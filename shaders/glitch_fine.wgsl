@@ -19,10 +19,10 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
     let tear_mask = step(0.96, hash(vec2(tear, 73.0)));
     let line_shift = mix(hash(vec2(line, 11.0)), hash(vec2(line, 29.0)), blend) * 2.0 - 1.0;
     let tear_shift = mix(hash(vec2(tear, 17.0)), hash(vec2(tear, 53.0)), blend) * 2.0 - 1.0;
-    let active = max(line_mask, tear_mask);
+    let affected_mask = max(line_mask, tear_mask);
     let shift = select(line_shift * 0.006 * line_mask, tear_shift * 0.015, tear_mask > 0.0);
     let displacement = shift * k * burst * params.resolution.x;
-    let split_px = active * k * burst * 0.002 * params.resolution.x;
+    let split_px = affected_mask * k * burst * 0.002 * params.resolution.x;
     let axis = direction / params.resolution;
     let p = uv + axis * displacement;
     let split = axis * split_px;
