@@ -129,6 +129,8 @@ struct Uniform {
     pad: [f32; 2],
 
     color: [f32; 4],
+    audio: [f32; 4],
+    audio_extra: [f32; 4],
 }
 
 struct Target {
@@ -200,15 +202,17 @@ struct StaticLayerCache {
 
 fn geometry_is_static(layer: &scene::Layer) -> bool {
     layer.shapes.iter().all(|shape| {
-        matches!(shape.motion, scene::Motion::Static)
+        !matches!(shape.kind, scene::ShapeKind::Spectrum)
+            && matches!(shape.motion, scene::Motion::Static)
             && shape.spin == 0.0
             && shape.pulse == 0.0
             && shape.text_source.is_none()
+            && shape.audio.is_none()
     })
 }
 
 fn effect_is_static(effect: &Effect) -> bool {
-    effect.pulse == 0.0
+    effect.pulse == 0.0 && effect.audio.is_none()
         && matches!(effect.kind, EffectKind::Grid | EffectKind::Blur | EffectKind::Crt)
 }
 
@@ -1013,12 +1017,13 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         output: &wgpu::TextureView,
         t: f64,
+        audio: &crate::audio::Frame,
     ) {
         if let Some(profiler) = &mut self.profiler {
             profiler.prepare(gpu);
         }
         let t = self.scene.time(t);
-        let layer_instances = self.scene.instances_for_viewport(t, self.width as f32, self.height as f32, self.pixel_scale);
+        let layer_instances = self.scene.instances_with_audio(t, self.width as f32, self.height as f32, self.pixel_scale, audio);
         // Pack both instance groups into one buffer, recording each layer's draw ranges.
         let mut flat = Vec::new();
         let ranges: Vec<_> = layer_instances
@@ -1049,12 +1054,15 @@ impl Renderer {
             offset: [0.0; 2],
             pad: [0.0; 2],
             color: [0.0, 0.0, 0.0, 1.0],
+            audio: [audio.signals.onset,audio.signals.kick,audio.signals.bass,audio.signals.mid],
+            audio_extra: [audio.signals.treble,audio.signals.volume,audio.signals.onset*audio.signals.onset_strength,audio.signals.kick*audio.signals.kick_strength],
         };
         let mut passes = Passes {
             encoder,
             bytes: &mut self.uniform_bytes,
             stride: self.stride,
             common,
+            audio,
             profiler: self.profiler.as_mut().filter(|p| p.recording),
         };
         passes.clear(&self.targets[2].view, self.background, "scene_clear");
@@ -1163,7 +1171,7 @@ impl Renderer {
                     )
                 };
                 if let Some(last) = terminal {
-                    let (strength, phase) = scene::effect_values(&last.config, t, self.scene.loop_seconds);
+                    let (strength, phase) = scene::effect_values(&last.config, t, self.scene.loop_seconds, audio);
                     let scissor = if self.sparse_glitch && prefix.is_none()
                         && sparse_glitch_eligible(&self.scene.layers[i], layer.clear, last.terminal)
                     {
@@ -1237,7 +1245,7 @@ impl Renderer {
                 t,
                 self.scene.loop_seconds,
             );
-            let (strength, phase) = scene::effect_values(&last.config, t, self.scene.loop_seconds);
+            let (strength, phase) = scene::effect_values(&last.config, t, self.scene.loop_seconds, audio);
             passes.draw(
                 fused_effect_label(last.config.kind),
                 &last.passes[0],
@@ -1290,6 +1298,7 @@ struct Passes<'a> {
     bytes: &'a mut Vec<u8>,
     stride: usize,
     common: Uniform,
+    audio: &'a crate::audio::Frame,
     profiler: Option<&'a mut FrameProfiler>,
 }
 
@@ -1392,7 +1401,7 @@ impl Passes<'_> {
         let mut current = input;
 
         for effect in effects {
-            let (strength, phase) = scene::effect_values(&effect.config, t, duration);
+            let (strength, phase) = scene::effect_values(&effect.config, t, duration, self.audio);
 
             let effect_color =
                 scene::parse_color(&effect.config.color).expect("validated effect color");
@@ -1533,7 +1542,7 @@ fn compile_effects(
                 }
                 EffectKind::Glitch => vec![(
                     "glitch",
-                    Cow::Borrowed(include_str!("../shaders/glitch.wgsl")),
+                    Cow::Owned(format!("const GLITCH_CONTINUOUS: bool = {};\n{}", e.continuous, include_str!("../shaders/glitch.wgsl"))),
                 )],
                 EffectKind::Blur => {
                     vec![("blur", Cow::Borrowed(include_str!("../shaders/blur.wgsl")))]

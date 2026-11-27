@@ -13,6 +13,14 @@ struct EffectUniform {
     _pad: vec2<f32>,
 
     color: vec4<f32>,
+    onset: f32,
+    kick: f32,
+    bass: f32,
+    mid: f32,
+    treble: f32,
+    volume: f32,
+    onset_strength: f32,
+    kick_strength: f32,
 };
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var source_sampler: sampler;

@@ -1,0 +1,94 @@
+# Direct audio energy demo; run with --allow-audio while music is playing.
+# No onset or kick detection is used by this scene.
+fps = 30
+loop_seconds = 60
+background = "#0d1216"
+
+[audio]
+enabled = true
+sensitivity = 1.0
+
+[[layers]]
+name = "spectrum"
+[[layers.shapes]]
+kind = "spectrum"
+bars = 64
+origin = "bottom_center"
+position = [0.0, 0.02]
+size = [1.2, 0.2]
+color = "#71c4e8"
+opacity = 0.2
+gap = 0.25
+attack = 0.005
+decay = 0.08
+
+[[layers]]
+name = "bass halo"
+effects = [{ kind = "blur", intensity = 5.0 }]
+[[layers.shapes]]
+kind = "circle"
+center = [0.5, 0.5]
+size = [0.48, 0.48]
+outline = 0.025
+color = "#71c4e8"
+opacity = 0
+[layers.shapes.audio]
+signal = "bass"
+size = 0.4
+opacity = 1
+attack = 0.005
+decay = 0.08
+
+[[layers]]
+name = "bass ring"
+[[layers.shapes]]
+kind = "circle"
+center = [0.5, 0.5]
+size = [0.48, 0.48]
+outline = 0.01
+color = "#526d81"
+opacity = 0.7
+[layers.shapes.audio]
+signal = "bass"
+size = 0.4
+color = "#e8faff"
+opacity = 0.3
+attack = 0.005
+decay = 0.08
+
+[[layers]]
+name = "rotating polygon"
+[[layers.effects]]
+kind = "glitch"
+intensity = 0.0
+period = 3
+[layers.effects.audio]
+signal = "bass"
+intensity = 0.25
+attack = 0.0
+decay = 0.008
+[[layers.shapes]]
+kind = "polygon"
+sides = 3
+size = [0.26, 0.26]
+outline = 0.025
+spin = 0.025
+color = "#b7dce8"
+[layers.shapes.audio]
+signal = "bass"
+spin = 0.2
+position = [0.005, 0.005]
+attack = 0.005
+decay = 0.08
+
+[[layers]]
+name = "signal legend"
+[[layers.shapes]]
+kind = "text"
+text = "AUDIO // REACTIVE\nBASS / LOG RESPONSE"
+origin = "top_left"
+position = [30, 30]
+position_unit = "px"
+size = [230, 48]
+size_unit = "px"
+color = "#b7dce8"
