@@ -3,105 +3,150 @@ use anyhow::{bail, Context, Result};
 use std::{io::{Read, ErrorKind}, os::fd::AsRawFd, process::{Child, Command, Stdio},
     sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, thread, time::{Duration, Instant}};
 
+use rustfft::{Fft, FftPlanner, num_complex::Complex32};
+
 const RATE: f32 = 48_000.0;
-const BLOCK: usize = 480; // 10 ms
+const BLOCK: usize = 512;
+const WINDOW: usize = 2048;
+const BINS: usize = WINDOW / 2 + 1;
 const DT: f32 = BLOCK as f32 / RATE;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Signals {
-    pub beat: f32,
-    pub beat_count: u64,
+    pub onset: f32,
+    pub kick: f32,
     pub bass: f32,
     pub mid: f32,
     pub treble: f32,
     pub volume: f32,
+    pub onset_count: u64,
+    pub kick_count: u64,
 }
 
-// Two-pole kick-band filter. Unlike the broad bass meter, this attenuates
-// speech fundamentals and DC, concentrating on roughly 40–100 Hz.
-struct KickFilter {
-    b: f32, a1: f32, a2: f32, z1: f32, z2: f32,
+// Causal adaptive peak picking: compare positive spectral flux with
+// its recent mean and require a local maximum (one hop of lookahead).
+// See FMP chapter 6, Spectral-Based Novelty and Peak Picking:
+// https://www.audiolabs-erlangen.de/resources/MIR/FMP/C6/C6S1_NoveltySpectral.html
+// https://www.audiolabs-erlangen.de/resources/MIR/FMP/C6/C6S1_PeakPicking.html
+#[derive(Default)]
+struct Peaks {
+    mean: f32,
+    older: f32,
+    previous: f32,
+    threshold: f32,
+    previous_audible: bool,
+    cooldown: f32,
+    envelope: f32,
+    count: u64,
 }
-impl KickFilter {
-    fn new() -> Self {
-        let w = std::f32::consts::TAU * 65.0 / RATE;
-        let alpha = w.sin() / (2.0 * 1.2);
-        let a0 = 1.0 + alpha;
-        Self { b: alpha/a0, a1: -2.0*w.cos()/a0, a2: (1.0-alpha)/a0, z1: 0., z2: 0. }
-    }
-    fn sample(&mut self, x: f32) -> f32 {
-        let y = self.b*x + self.z1;
-        self.z1 = self.z2 - self.a1*y;
-        self.z2 = -self.b*x - self.a2*y;
-        y
+impl Peaks {
+    fn update(&mut self, flux: f32, audible: bool, sensitivity: f32) -> f32 {
+        self.cooldown = (self.cooldown - DT).max(0.);
+        self.envelope *= (-DT / 0.15).exp();
+        if self.cooldown == 0. && self.previous_audible
+            && self.previous > self.older && self.previous >= flux
+            && self.previous > self.threshold {
+            self.envelope = 1.;
+            self.count += 1;
+            self.cooldown = 0.09;
+        }
+        self.older = self.previous;
+        self.previous = flux;
+        self.previous_audible = audible;
+        self.threshold = (1.5 * self.mean + 0.002) / sensitivity.sqrt();
+        self.mean += (1. - (-DT / 0.4).exp()) * (flux - self.mean);
+        self.envelope
     }
 }
+
 struct Analyzer {
-    low: f32,
-    high: f32,
-    kick: KickFilter,
-    kick_reference: f32,
-    novelty_floor: f32,
-    armed: bool,
-    since_beat: f32,
-    elapsed: f32,
+    fft: Arc<dyn Fft<f32>>,
+    scratch: Vec<Complex32>,
+    spectrum: Vec<Complex32>,
+    history: [f32; WINDOW],
+    window: [f32; WINDOW],
+    previous: [f32; BINS],
+    filled: usize,
+    onset: Peaks,
+    kick: Peaks,
     sensitivity: f32,
     signals: Signals,
 }
 impl Analyzer {
     fn new(sensitivity: f32) -> Self {
-        Self { low: 0., high: 0., kick: KickFilter::new(), kick_reference: 0., novelty_floor: 0., armed: true, since_beat: 1., elapsed: 0., sensitivity, signals: Signals::default() }
+        let fft = FftPlanner::<f32>::new().plan_fft_forward(WINDOW);
+        let scratch = vec![Complex32::default(); fft.get_inplace_scratch_len()];
+        Self { fft, scratch, spectrum: vec![Complex32::default(); WINDOW],
+            history: [0.; WINDOW],
+            window: std::array::from_fn(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / WINDOW as f32).cos()),
+            previous: [0.; BINS], filled: 0, onset: Peaks::default(), kick: Peaks::default(),
+            sensitivity, signals: Signals::default() }
     }
     fn process(&mut self, samples: &[f32; BLOCK]) -> Signals {
-        // First-order crossover filters: approximate bands, not FFT bins.
-        let low_alpha = 1.0 - (-std::f32::consts::TAU * 180.0 / RATE).exp();
-        let high_alpha = 1.0 - (-std::f32::consts::TAU * 2500.0 / RATE).exp();
-        let mut energy = [0.0; 5];
-        for &sample in samples {
-            let x = if sample.is_finite() { sample.clamp(-1., 1.) } else { 0. };
-            self.low += low_alpha * (x - self.low);
-            self.high += high_alpha * (x - self.high);
-            let mid = self.high - self.low;
-            let treble = x - self.high;
-            energy[0] += self.low * self.low;
-            energy[1] += mid * mid;
-            energy[2] += treble * treble;
-            energy[3] += x * x;
-            let kick = self.kick.sample(x);
-            energy[4] += kick * kick;
+        self.history.copy_within(BLOCK.., 0);
+        for (dst, &x) in self.history[WINDOW-BLOCK..].iter_mut().zip(samples) {
+            *dst = if x.is_finite() { x.clamp(-1.,1.) } else { 0. };
         }
-        let rms = energy.map(|e| (e / BLOCK as f32).sqrt());
-        self.elapsed += DT;
-        self.since_beat += DT;
-        // Positive log-energy novelty against a short local reference.
-        // The reference follows sustained bass, so repeated kicks can trigger
-        // even after the song has reached its normal loudness.
-        let kick = rms[4];
-        let novelty = ((kick + 0.003) / (self.kick_reference + 0.003)).ln().max(0.0);
-        let threshold = (0.18 / self.sensitivity.sqrt()).max(2.2 * self.novelty_floor);
-        let dominance = kick / rms[3].max(0.003);
-        if novelty < threshold * 0.55 { self.armed = true; }
-        let onset = self.elapsed > 0.15 && self.since_beat >= 0.22 && self.armed
-            && kick > 0.006 && dominance > 0.22 && novelty > threshold;
-        self.kick_reference += (1.0 - (-DT / 0.075).exp()) * (kick - self.kick_reference);
-        self.novelty_floor += (1.0 - (-DT / 1.0).exp()) * (novelty.min(0.5) - self.novelty_floor);
-        self.signals.beat *= (-DT / 0.18).exp();
-        if onset {
-            self.signals.beat = 1.0;
-            self.since_beat = 0.0;
-            self.armed = false;
-            self.signals.beat_count += 1;
+        self.filled = (self.filled + BLOCK).min(WINDOW);
+        for ((dst, &x), &w) in self.spectrum.iter_mut().zip(&self.history).zip(&self.window) {
+            *dst = Complex32::new(x*w, 0.);
         }
+        self.fft.process_with_scratch(&mut self.spectrum, &mut self.scratch);
+        let mut energy = [0.; 3];
+        let mut flux = [0.; 3];
+        let mut counts = [0usize; 3];
+        let mut kick_flux = 0.;
+        let mut kick_bins = 0;
+        let mut kick_energy = 0.;
+        for k in 1..BINS-1 {
+            let hz = k as f32 * RATE / WINDOW as f32;
+            let power = self.spectrum[k].norm_sqr() * (2. / (WINDOW as f32 * WINDOW as f32 * 0.375));
+            let magnitude = power.sqrt();
+            // Log compression makes quieter transients visible; half-wave
+            // rectification ignores energy decreases.
+            let compressed = (1. + 100. * magnitude).ln();
+            let change = (compressed - self.previous[k]).max(0.);
+            self.previous[k] = compressed;
+            let band = if hz < 200. { 0 } else if hz < 2500. { 1 } else { 2 };
+            energy[band] += power;
+            flux[band] += change;
+            counts[band] += 1;
+            if hz <= 150. {
+                kick_flux += change;
+                kick_energy += power;
+                kick_bins += 1;
+            }
+        }
+        let rms = energy.map(f32::sqrt);
+        let volume = energy.iter().sum::<f32>().sqrt();
+        // Equal weighting of the three bands prevents the numerous high
+        // frequency bins from overwhelming low-frequency impacts.
+        let novelty = (0..3).map(|i| flux[i] / counts[i] as f32).sum::<f32>() / 3.;
+        let kick_novelty = kick_flux / kick_bins as f32;
+        let ready = self.filled == WINDOW;
+        self.signals.onset = self.onset.update(novelty, ready && volume > 0.003, self.sensitivity);
+        self.signals.kick = self.kick.update(kick_novelty, ready && kick_energy.sqrt() > 0.003, self.sensitivity);
+        self.signals.onset_count = self.onset.count;
+        self.signals.kick_count = self.kick.count;
         let smooth = |old: f32, rms: f32| {
-            let next = (rms * 4.0 * self.sensitivity).clamp(0., 1.);
+            let next = (rms * 4. * self.sensitivity).clamp(0.,1.);
             let tau = if next > old { 0.025 } else { 0.12 };
-            old + (1.0 - (-DT / tau).exp()) * (next - old)
+            old + (1. - (-DT/tau).exp()) * (next-old)
         };
-        self.signals.bass = smooth(self.signals.bass, rms[0]);
-        self.signals.mid = smooth(self.signals.mid, rms[1]);
-        self.signals.treble = smooth(self.signals.treble, rms[2]);
-        self.signals.volume = smooth(self.signals.volume, rms[3]);
+        self.signals.bass = smooth(self.signals.bass,rms[0]);
+        self.signals.mid = smooth(self.signals.mid,rms[1]);
+        self.signals.treble = smooth(self.signals.treble,rms[2]);
+        self.signals.volume = smooth(self.signals.volume,volume);
         self.signals
+    }
+    fn reset(&mut self) {
+        self.history.fill(0.);
+        self.previous.fill(0.);
+        self.filled = 0;
+        let (onsets,kicks) = (self.onset.count,self.kick.count);
+        self.onset = Peaks { count: onsets, ..Peaks::default() };
+        self.kick = Peaks { count: kicks, ..Peaks::default() };
+        self.signals = Signals { onset_count: onsets, kick_count: kicks, ..Signals::default() };
     }
 }
 
@@ -150,9 +195,7 @@ fn capture(target: Option<&str>, sensitivity: f32, running: &AtomicBool, output:
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted => {
                 if last.elapsed() > Duration::from_secs(2) {
-                    let count = analyzer.signals.beat_count;
-                    analyzer = Analyzer::new(sensitivity);
-                    analyzer.signals.beat_count = count;
+                    analyzer.reset();
                     *output.lock().expect("audio mutex poisoned") = analyzer.signals;
                 }
                 thread::sleep(Duration::from_millis(5));
@@ -177,11 +220,14 @@ pub fn diagnose(target: Option<String>, sensitivity: f32) -> Result<()> {
         result
     })?;
     eprintln!("Audio diagnostic: playback monitor, Ctrl-C to stop");
-    let mut last_count = 0;
+    let mut last = (0,0);
     while running.load(Ordering::Acquire) {
         let s = *values.lock().expect("audio mutex poisoned");
-        println!("beat={:.2} count={} bass={:.2} mid={:.2} treble={:.2} volume={:.2}{}", s.beat, s.beat_count, s.bass, s.mid, s.treble, s.volume, if s.beat_count != last_count { "  KICK" } else { "" });
-        last_count = s.beat_count;
+        println!("onset={:.2} kick={:.2} bass={:.2} mid={:.2} treble={:.2} volume={:.2} onsets={} kicks={}{}{}",
+            s.onset,s.kick,s.bass,s.mid,s.treble,s.volume,s.onset_count,s.kick_count,
+            if s.onset_count != last.0 { " ONSET" } else { "" },
+            if s.kick_count != last.1 { " KICK" } else { "" });
+        last = (s.onset_count,s.kick_count);
         thread::sleep(Duration::from_millis(100));
     }
     worker.join().map_err(|_| anyhow::anyhow!("Audio worker panicked"))?
@@ -195,50 +241,41 @@ mod tests {
         let mut a = Analyzer::new(1.);
         for _ in 0..100 {
             let s = a.process(&[f32::NAN; BLOCK]);
-            assert_eq!(s.beat, 0.);
-            assert_eq!(s.volume, 0.);
+            assert_eq!(s.onset,0.);
+            assert_eq!(s.kick,0.);
+            assert_eq!(s.volume,0.);
         }
     }
     #[test]
-    fn bass_transient_triggers_then_decays() {
+    fn repeated_impacts_over_sustained_tone() {
         let mut a = Analyzer::new(1.);
-        for _ in 0..100 { a.process(&[0.; BLOCK]); }
-        let tone = std::array::from_fn(|i| 0.5 * (std::f32::consts::TAU * 100. * i as f32 / RATE).sin());
-        let s = a.process(&tone);
-        assert_eq!(s.beat, 1.);
-        assert!(s.bass > s.treble);
-        for _ in 0..100 { a.process(&[0.; BLOCK]); }
-        assert!(a.signals.beat < 0.01);
+        for block in 0..1000 {
+            let phase = block % 48;
+            let samples = std::array::from_fn(|i| {
+                let t = (block*BLOCK+i) as f32 / RATE;
+                let pulse = if phase < 6 { 0.35 * (-(phase as f32)/3.).exp() } else { 0. };
+                (0.10+pulse)*(std::f32::consts::TAU*70.*t).sin()
+            });
+            a.process(&samples);
+        }
+        assert!(a.signals.kick_count >= 15, "detected {}",a.signals.kick_count);
+        assert!(a.signals.kick_count <= 30, "detected {}",a.signals.kick_count);
+        for _ in 0..150 { a.process(&[0.;BLOCK]); }
+        assert!(a.signals.kick < 0.01);
         assert!(a.signals.volume < 0.01);
     }
     #[test]
-    fn repeated_kicks_over_sustained_bass() {
+    fn steady_tone_does_not_trigger_continuously() {
         let mut a = Analyzer::new(1.);
-        for block in 0..1000 {
-            let phase = block % 50;
-            let tone = std::array::from_fn(|i| {
-                let t = (block * BLOCK + i) as f32 / RATE;
-                let kick = if phase < 8 { 0.30 * (-phase as f32 / 4.0).exp() } else { 0.0 };
-                0.12 * (std::f32::consts::TAU * 65.0 * t).sin()
-                    + kick * (std::f32::consts::TAU * 65.0 * t).sin()
+        for block in 0..500 {
+            let samples = std::array::from_fn(|i| {
+                let t = (block*BLOCK+i) as f32/RATE;
+                0.3*(std::f32::consts::TAU*750.*t).sin()
             });
-            a.process(&tone);
+            a.process(&samples);
         }
-        assert!((17..=20).contains(&a.signals.beat_count), "detected {}", a.signals.beat_count);
+        assert!(a.signals.onset_count <= 2);
+        assert!(a.signals.mid > a.signals.bass);
+        assert!(a.signals.mid > a.signals.treble);
     }
-
-    #[test]
-    fn higher_frequency_pulses_are_not_kicks() {
-        let mut a = Analyzer::new(1.);
-        for block in 0..300 {
-            let tone = std::array::from_fn(|i| {
-                let t = (block * BLOCK + i) as f32 / RATE;
-                let amp = if block % 50 < 10 { 0.4 } else { 0.0 };
-                amp * (std::f32::consts::TAU * 350.0 * t).sin()
-            });
-            a.process(&tone);
-        }
-        assert_eq!(a.signals.beat_count, 0);
-    }
-
 }
