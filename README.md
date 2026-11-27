@@ -171,6 +171,12 @@ Set `FLOATPAPER_COMPACT_INTERMEDIATES=1` at startup to use RGBA8UnormSrgb rather
 
 This is opt-in because 8-bit RGB and alpha quantization and clamping to [0,1] can change results, especially dark gradients, translucent edges, repeated blending and custom effects that output extended-range values. Do not use it if exact visual fidelity or prior export reproduction is required. Compare both modes with profiling enabled, then measure GPU utilization with profiling disabled.
 
+## Shared output rendering
+
+Live outputs with matching physical buffer dimensions and surface texture format share one renderer. Groups with two or more outputs render to a same-format GPU texture, then copy to each swapchain if COPY_DST is supported, otherwise use an unfiltered texel-load blit. A ready surface can reuse a group frame less than one requested frame interval old, without waiting for other surfaces' frame callbacks. Independent refresh schedules can therefore introduce a small difference in animation timing compared with the original independent renderers. Single-output groups render straight to the swapchain. Preview and offline export do not share frames.
+
+Render groups are rebuilt/reconciled on output size changes, hotplug, or successful scene reload; unused groups are released. Set `FLOATPAPER_DISABLE_OUTPUT_SHARING=1` to restore independent live rendering. The profiler labels shared-mode renderers by group dimensions and format, and reports unique rendered frames (not the number of surface presentations). Shared-frame transfers are outside its measured effect-pass durations, so compare actual GPU utilization with profiling disabled too.
+
 ## GPU profiling (live or preview)
 
 Run with the optional timestamp profiler enabled:
