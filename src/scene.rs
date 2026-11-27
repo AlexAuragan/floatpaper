@@ -476,8 +476,29 @@ mod tests {
     }
     #[test]
     fn cutouts_are_separate_and_loop() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let s = Scene::load(&root.join("scenes/cutout.toml")).unwrap();
+        // Keep the test independent of the editable wallpaper examples.
+        let s: Scene = toml::from_str(r#"
+loop_seconds = 30.0
+seed = 7
+
+[[layers]]
+name = "background"
+[[layers.shapes]]
+kind = "triangle"
+count = 8
+
+[[layers]]
+name = "cutouts"
+[[layers.shapes]]
+kind = "rectangle"
+composite = "cutout"
+count = 18
+motion = "orbit"
+period = 10.0
+rotation = 10.0
+rotation_jitter = 8.0
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
         let a = s.instances(0.0);
         let b = s.instances(s.loop_seconds.unwrap());
         assert_eq!(a[0].over.len(), 8);

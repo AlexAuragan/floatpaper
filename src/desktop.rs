@@ -162,7 +162,7 @@ fn reconcile_outputs(state:&mut Desktop,qh:&QueueHandle<Desktop>,selected:Option
         let scale=output.scale.max(1);
         if surface.version()>=3 { surface.set_buffer_scale(scale); }
         surface.commit();
-        eprintln!("Attached output {}",output.name.as_deref().unwrap_or("unnamed"));
+        eprintln!("Attached output {} (surface {})",output.name.as_deref().unwrap_or("unnamed"),id);
         state.surfaces.insert(id,Screen {render:None,role:Role::Layer(layer),surface,logical:(1,1),scale,pending:true,configured:false,ready:true,closed:false,last_frame:None});
     }
 }
@@ -186,7 +186,9 @@ fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mu
         let format=caps.formats.iter().copied().find(|f|f.is_srgb()).or_else(||caps.formats.first().copied()).context("GPU cannot present to this output")?;
         let alpha_mode=if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) { wgpu::CompositeAlphaMode::Opaque } else { *caps.alpha_modes.first().context("No supported alpha modes")? };
         let config=wgpu::SurfaceConfiguration { usage:wgpu::TextureUsages::RENDER_ATTACHMENT,format,width,height,present_mode:wgpu::PresentMode::Fifo,desired_maximum_frame_latency:2,alpha_mode,view_formats:vec![] };
-        let renderer=Renderer::new(gpu,scene.clone(),base,width,height,format)?;
+        let mut renderer=Renderer::new(gpu,scene.clone(),base,width,height,format)?;
+        let id=*screen.surface.data::<u32>().context("Missing surface id")?;
+        renderer.enable_profile(gpu,format!("surface={id}"));
         surface.configure(&gpu.device,&config);
         screen.render=Some(RenderSurface{surface,config,renderer});
         eprintln!("Surface {width}x{height} ({format:?})");
@@ -211,6 +213,7 @@ fn draw(gpu:&Gpu,screen:&mut Screen,qh:&QueueHandle<Desktop>,t:f64)->Result<bool
     screen.surface.frame(qh,id);
     screen.ready=false;
     frame.present();
+    r.renderer.profile_submitted();
     Ok(true)
 }
 fn reload(gpu:&Gpu,state:&mut Desktop,path:&Path)->Result<Scene> {
@@ -219,7 +222,8 @@ fn reload(gpu:&Gpu,state:&mut Desktop,path:&Path)->Result<Scene> {
     let mut replacements=Vec::new();
     for (&id,screen) in &state.surfaces {
         if let Some(r)=&screen.render {
-            let new=Renderer::new(gpu,scene.clone(),base,r.config.width,r.config.height,r.config.format)?;
+            let mut new=Renderer::new(gpu,scene.clone(),base,r.config.width,r.config.height,r.config.format)?;
+            new.enable_profile(gpu,format!("surface={id}"));
             replacements.push((id,new));
         }
     }

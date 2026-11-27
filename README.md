@@ -133,6 +133,18 @@ During preview or live mode, the scene directory and initially referenced extern
 
 All built-in animations are pure functions of scene time and deterministic seeds. For a loop of duration T, an animation with requested rate r is snapped to the nearest nonzero integer number of cycles per T (zero remains zero). Thus rotations, orbital motion, drift, size pulses and built-in effect phases repeat. Very slow motions can be noticeably accelerated in short loops. Horizontal wrapping adds edge copies; extremely wide shapes can overlap their own copies. Custom shaders must obey the same periodicity contract. Export samples `t = frame / fps` for frames 0 through N-1; it does not duplicate the first frame at the end.
 
+## GPU profiling (live or preview)
+
+Run with the optional timestamp profiler enabled:
+
+```sh
+FLOATPAPER_PROFILE=1 cargo run --release -- live scenes/cutout.toml
+```
+
+The adapter must support wgpu's TIMESTAMP_QUERY feature; otherwise startup reports an explicit error. Each output reports submitted frames per second, sample count, mean and p95 sum of measured GPU pass durations, and mean milliseconds per effect category every five seconds. One in fifteen submitted frames is sampled, with asynchronous readback; samples are skipped if the previous result is still pending. Frames with more than 512 passes are not profiled. This is not compositor presentation FPS or end-to-end latency. GPU timestamp instrumentation can itself affect scheduling, so compare utilization with profiling disabled for final benchmarks.
+
+For an A/B test, run the same command with `FLOATPAPER_DISABLE_CACHE=1` as well (stop the first process first). Keep monitor layout, scene, and FPS fixed. Profiling is off by default and does not change scene configuration.
+
 ## Architecture
 
 ```text
@@ -151,6 +163,6 @@ The four intermediate render textures are reused on each output: two ping-pong t
 
 - Direct `wayland-client` / `wayland-protocols-wlr` bindings instead of SCTK, to avoid a second abstraction for the two small surface roles. `calloop` drives the event loop.
 - `wgpu` 0.19 API family selected for the initial implementation. It is older than current releases; upgrade after confirming the baseline compiles and renders. Dependency ranges are not locked until `cargo check` resolves them. Commit the resulting Cargo.lock for reproducibility.
-- No automatic video cache/hash invalidation, no hybrid mode, no automatic mode switching, no fractional-scale protocol, no keyframes, no static-layer caching or lower-resolution blur. All effects are full-resolution and intermediate textures cost roughly 32 bytes per pixel per output (plus swapchain and other buffers). Hot reload temporarily allocates another set.
+- No automatic video cache/hash invalidation, no hybrid mode, no automatic mode switching, no fractional-scale protocol, no keyframes, no lower-resolution blur. Static-layer caching combines one contiguous static layer run per output. All effects are full-resolution and intermediate textures cost roughly 32 bytes per pixel per output (plus swapchain and other buffers). Hot reload temporarily allocates another set.
 - Offline export uses synchronous CPU readback and software H.264 encoding, not a zero-copy hardware encoder. Export may be slower than real time. Playback uses an external player instead of libmpv integration.
 - Power, loop playback continuity, multi-monitor/hotplug, reload and GPU compatibility are not verified. First compile, then minimal preview, then live, then export; profile after correctness.
