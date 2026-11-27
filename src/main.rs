@@ -2,6 +2,7 @@ mod scene;
 mod renderer;
 mod desktop;
 mod visibility;
+mod control;
 mod export;
 
 use anyhow::{bail, Context, Result};
@@ -20,6 +21,14 @@ enum Action {
     Preview { scene: PathBuf, #[arg(long, default_value_t = 960)] width: u32, #[arg(long, default_value_t = 540)] height: u32 },
     /// Draw on Wayland's background layer; defaults to all connected outputs.
     Live { scene: PathBuf, #[arg(long)] output: Option<String> },
+    /// Freeze the running live wallpaper without removing it.
+    Pause,
+    /// Resume the running live wallpaper.
+    Resume,
+    /// Toggle manual pause on the running live wallpaper.
+    Toggle,
+    /// Print the running live wallpaper's manual pause state.
+    Status,
     /// Render a deterministic H.264 video using FFmpeg.
     Export { scene: PathBuf, #[arg(short, long)] output: PathBuf,
         #[arg(long, default_value_t = 1920)] width: u32, #[arg(long, default_value_t = 1080)] height: u32,
@@ -43,6 +52,10 @@ fn main() -> Result<()> {
         }
         Action::Preview { scene, width, height } => desktop::run(&scene, desktop::Mode::Preview { width, height }),
         Action::Live { scene, output } => desktop::run(&scene, desktop::Mode::Live { output }),
+        Action::Pause => control::send(control::Command::Pause),
+        Action::Resume => control::send(control::Command::Resume),
+        Action::Toggle => control::send(control::Command::Toggle),
+        Action::Status => control::send(control::Command::Status),
         Action::Export { scene, output, width, height, fps, duration, crf, allow_non_loop, overwrite } => {
             export::run(&scene, &output, export::Options { width, height, fps, duration, crf, allow_non_loop, overwrite })
         }
