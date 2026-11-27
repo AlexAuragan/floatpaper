@@ -5,6 +5,7 @@ use std::{fs, io::Write, path::{Path, PathBuf}, process::{Command, Stdio}, sync:
 pub struct Options { pub width:u32, pub height:u32, pub fps:Option<u32>, pub duration:Option<f64>, pub crf:u8, pub allow_non_loop:bool, pub overwrite:bool }
 pub fn run(scene_path:&Path, output:&Path, options:Options) -> Result<()> {
     let scene=Scene::load(scene_path)?;
+    if scene.has_commands() { eprintln!("WARNING: MP4 cannot display real-time command text. Export uses configured defaults; no commands will execute."); }
     let fps=options.fps.unwrap_or(scene.fps);
     if !(1..=240).contains(&fps) { bail!("fps must be 1..=240"); }
     let duration=options.duration.or(scene.loop_seconds).context("Set --duration for a non-looping scene")?;
