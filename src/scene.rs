@@ -84,6 +84,7 @@ pub struct ShapeAudio {
     #[serde(default)] pub signal: audio::Signal,
     #[serde(default = "audio_attack")] pub attack: f32,
     #[serde(default = "audio_decay")] pub decay: f32,
+    #[serde(default = "one")] pub power: f32,
     #[serde(default)] pub size: f32,
     #[serde(default)] pub position: [f32;2],
     #[serde(default)] pub spin: f64,
@@ -93,7 +94,7 @@ pub struct ShapeAudio {
 fn audio_attack() -> f32 { 0.01 }
 fn audio_decay() -> f32 { 0.15 }
 impl ShapeAudio {
-    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay } }
+    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay, power:self.power } }
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -101,10 +102,11 @@ pub struct EffectAudio {
     #[serde(default)] pub signal: audio::Signal,
     #[serde(default = "audio_attack")] pub attack: f32,
     #[serde(default = "audio_decay")] pub decay: f32,
+    #[serde(default = "one")] pub power: f32,
     #[serde(default)] pub intensity: f32,
 }
 impl EffectAudio {
-    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay } }
+    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay, power:self.power } }
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -334,8 +336,8 @@ impl Scene {
             .filter_map(|s| s.audio.as_ref().map(ShapeAudio::response))
             .chain(self.effects.iter().chain(self.layers.iter().flat_map(|l| &l.effects))
                 .filter_map(|e| e.audio.as_ref().map(EffectAudio::response))).collect();
-        responses.sort_by_key(|r| (r.signal,r.attack.to_bits(),r.decay.to_bits()));
-        responses.dedup_by_key(|r| (r.signal,r.attack.to_bits(),r.decay.to_bits()));
+        responses.sort_by_key(|r| r.key());
+        responses.dedup_by_key(|r| r.key());
         responses
     }
     pub fn shape_count(&self) -> usize {
