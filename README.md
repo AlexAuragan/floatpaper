@@ -159,6 +159,12 @@ The last single-pass built-in effect of a layer can blend directly into the scen
 
 Set `FLOATPAPER_DISABLE_LAYER_FUSION=1` for an isolated comparison; final global effect fusion and both static caches remain enabled. Profiler categories such as `glitch_composite` replace the corresponding effect and composite passes. Removing the intermediate FP16 conversion and same-resolution sample can introduce small pixel differences.
 
+## Sparse glitch rendering
+
+Transparent geometry layers with exactly one fused glitch effect use a conservative per-frame scissor rectangle. The rectangle bounds all over-geometry quads (including wrapped copies and rotation), expanded for the maximum glitch displacement, chromatic split and filtering slack. The destination is loaded, not cleared; pixels outside the rectangle remain unchanged. Opaque backgrounds, multi-effect chains, prefix caches, extreme coordinates and unusable rectangles retain the full-screen path. The geometry texture still uses the full output resolution and is cleared as before.
+
+Set `FLOATPAPER_DISABLE_SPARSE_GLITCH=1` to compare against the original full-screen path. The profiler reports restricted passes separately as `glitch_composite_sparse`. Compare their sum with the remaining `glitch_composite` category against the previous combined cost. The bounds depend on the geometry and glitch shader implementations; update them if those shaders change.
+
 ## GPU profiling (live or preview)
 
 Run with the optional timestamp profiler enabled:
