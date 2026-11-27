@@ -265,6 +265,7 @@ impl Signal {
 }
 fn default_attack() -> f32 { 0.01 }
 fn default_power() -> f32 { 1.0 }
+fn default_true() -> bool { true }
 fn default_decay() -> f32 { 0.15 }
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub struct Response {
@@ -272,7 +273,7 @@ pub struct Response {
     #[serde(default = "default_attack")] pub attack: f32,
     #[serde(default = "default_decay")] pub decay: f32,
     #[serde(default = "default_power")] pub power: f32,
-    #[serde(default)] pub logarithmic: bool,
+    #[serde(default = "default_true")] pub logarithmic: bool,
 }
 impl Response {
     pub fn validate(self) -> Result<()> {
@@ -304,7 +305,7 @@ impl Frame {
             let state = self.values.entry(response.key()).or_default();
             if !active { state.value = 0.; continue; }
             let input = response.signal.read(&signals).clamp(0.,1.);
-            let target = if response.logarithmic { (9.0 * input).ln_1p() / std::f32::consts::LN_10 } else if response.power == 1.0 { input } else if response.power == 2.0 { input*input } else { input.powf(response.power) };
+            let target = if response.logarithmic { ((9.0 * input).ln_1p() / std::f32::consts::LN_10).clamp(0.,1.) } else if response.power == 1.0 { input } else if response.power == 2.0 { input*input } else { input.powf(response.power) };
             let tau = if target > state.value { response.attack } else { response.decay } as f64;
             let old = state.value as f64;
             let target = target as f64;
