@@ -86,6 +86,11 @@ pub enum ShapeKind {
     Rectangle,
     Triangle,
     Polygon,
+    Svg,
+    Text,
+}
+impl ShapeKind {
+    pub fn is_sprite(self) -> bool { matches!(self, Self::Svg | Self::Text) }
 }
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -147,7 +152,17 @@ pub struct Shape {
     pub pulse: f32,
     #[serde(default)]
     pub composite: ShapeComposite,
+    #[serde(default)] pub path: Option<PathBuf>,
+    #[serde(default)] pub text: Option<String>,
+    #[serde(default)] pub font_family: Option<String>,
+    #[serde(default = "font_size_default")] pub font_size: f32,
+    #[serde(default = "line_height_default")] pub line_height: f32,
+    #[serde(default = "raster_size_default")] pub raster_size: u32,
+    #[serde(default)] pub preserve_color: bool,
 }
+fn font_size_default() -> f32 { 64.0 }
+fn line_height_default() -> f32 { 1.2 }
+fn raster_size_default() -> u32 { 1024 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Effect {
@@ -234,6 +249,22 @@ impl Scene {
             validate_effects(&layer.effects, base)?;
             for shape in &layer.shapes {
                 parse_color(&shape.color)?;
+                match shape.kind {
+                    ShapeKind::Svg => {
+                        let path = base.join(shape.path.as_ref().context("SVG shape requires path")?);
+                        if !path.is_file() { bail!("SVG asset not found: {}", path.display()); }
+                        if !(16..=4096).contains(&shape.raster_size) { bail!("raster_size must be in 16..=4096"); }
+                        if shape.text.is_some() || shape.font_family.is_some() { bail!("SVG shape cannot use text fields"); }
+                    }
+                    ShapeKind::Text => {
+                        let text = shape.text.as_ref().context("Text shape requires text")?;
+                        if text.trim().is_empty() || text.len() > 16384 { bail!("Text must contain 1..=16384 bytes and visible content"); }
+                        if !(8.0..=256.0).contains(&shape.font_size) || !(0.5..=3.0).contains(&shape.line_height) { bail!("Invalid text font_size or line_height"); }
+                        if shape.path.is_some() || shape.preserve_color { bail!("Text shapes use a tinted glyph mask, not path or preserve_color"); }
+                    }
+                    _ => if shape.path.is_some() || shape.text.is_some() || shape.font_family.is_some() || shape.preserve_color { bail!("Sprite fields require svg or text shape"); },
+                }
+                if shape.kind.is_sprite() && shape.outline != 0.0 { bail!("Sprite shapes do not support analytic outline"); }
                 unit(shape.opacity, "shape.opacity")?;
                 unit(shape.outline, "shape.outline")?;
                 unit(shape.size_jitter, "shape.size_jitter")?;
@@ -340,11 +371,13 @@ impl Scene {
                             ShapeKind::Rectangle => (1., 4.),
                             ShapeKind::Triangle => (2., 3.),
                             ShapeKind::Polygon => (2., shape.sides as f32),
+                            // Shape index identifies the immutable texture within this layer.
+                            ShapeKind::Svg | ShapeKind::Text => (3., si as f32),
                         };
                         let instance = Instance {
                             center_size: [x, y, shape.size[0] * scale, shape.size[1] * scale],
                             color: [color[0], color[1], color[2], alpha],
-                            params: [angle.rem_euclid(TAU) as f32, kind, sides, shape.outline],
+                            params: [angle.rem_euclid(TAU) as f32, kind, sides, if shape.preserve_color { 1.0 } else { shape.outline }],
                         };
                         match shape.composite {
                             ShapeComposite::Over => out.over.push(instance),
@@ -470,7 +503,7 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
     }
