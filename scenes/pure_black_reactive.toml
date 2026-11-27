@@ -1,0 +1,211 @@
+# Original monochrome scene, inspired by the Pure Black visual aesthetic.
+fps = 30
+# Preserve the 16:9 composition's relative shape area on other displays.
+size_reference_aspect = 1.7777778
+loop_seconds = 1200.0
+seed = 4726
+background = "#07080b"
+effects = [
+  { kind = "crt", intensity = 0.22 },
+  { kind = "noise", intensity = 0.024, period = 16.0 },
+  { kind = "custom", shader = "../shaders/custom_vignette.wgsl", intensity = 0.60 },
+]
+
+[audio]
+enabled = true
+sensitivity = 1.0
+
+[[layers]]
+name = "distant-dust"
+opacity = 0.55
+effects = [{ kind = "blur", intensity = 2.0 }]
+
+[[layers.shapes]]
+kind = "circle"
+count = 90
+center = [0.5, 0.5]
+spread = [0.65, 0.65]
+size = [0.012, 0.012]
+size_jitter = 0.80
+color = "#626675"
+opacity = 0.50
+motion = "drift"
+radius = [0.09, 0.05]
+period = 80.0
+pulse = 0.35
+[layers.shapes.audio]
+signal = "bass"
+speed = 1.0
+size = 0.1
+attack = 0.005
+decay = 0.15
+
+
+[[layers.shapes]]
+kind = "polygon"
+sides = 6
+count = 14
+center = [0.5, 0.5]
+spread = [0.6, 0.6]
+size = [0.22, 0.22]
+size_jitter = 0.65
+color = "#474b58"
+opacity = 0.42
+outline = 0.024
+motion = "drift"
+radius = [0.08, 0.09]
+period = 120.0
+spin = 0.0083333333
+[layers.shapes.audio]
+signal = "bass"
+speed = 1.0
+size = 0.1
+spin = 0.025
+attack = 0.005
+decay = 0.15
+
+
+[[layers]]
+name = "middle-fragments"
+opacity = 0.76
+effects = [{ kind = "blur", intensity = 0.65 }]
+
+[[layers.shapes]]
+kind = "triangle"
+count = 28
+center = [0.5, 0.5]
+spread = [0.63, 0.60]
+size = [0.055, 0.055]
+size_jitter = 0.82
+color = "#a1a2ac"
+opacity = 0.48
+outline = 0.07
+motion = "drift"
+radius = [0.14, 0.14]
+period = 60.0
+spin = -0.025
+pulse = 0.2
+[layers.shapes.audio]
+signal = "bass"
+speed = 3.0
+size = 0.3
+spin = -0.075
+attack = 0.005
+decay = 0.15
+
+
+[[layers.shapes]]
+kind = "rectangle"
+count = 17
+center = [0.5, 0.5]
+spread = [0.65, 0.65]
+size = [0.025, 0.065]
+size_jitter = 0.8
+color = "#83858d"
+opacity = 0.4
+motion = "wrap"
+radius = [0.0, 0.045]
+period = 240.0
+spin = 0.0125
+[layers.shapes.audio]
+signal = "bass"
+speed = 3.0
+size = 0.3
+spin = 0.0375
+attack = 0.005
+decay = 0.15
+
+
+[[layers]]
+name = "near-geometry"
+effects = [{ kind = "glitch", glitch_style = "fine", intensity = 0.35, period = 48.0, pulse = 0.6, audio = { signal = "kick_strength", intensity = 0.20, attack = 0.012, decay = 0.12 } }]
+
+[[layers.shapes]]
+kind = "triangle"
+count = 9
+center = [0.5, 0.5]
+spread = [0.55, 0.45]
+size = [0.16, 0.16]
+size_jitter = 0.65
+color = "#e9e8f2"
+opacity = 0.65
+outline = 0.018
+motion = "drift"
+radius = [0.15, 0.14]
+period = 100.0
+spin = 0.0166666667
+[layers.shapes.audio]
+signal = "bass"
+speed = 3.0
+size = 0.3
+spin = 0.05
+attack = 0.005
+decay = 0.15
+
+
+[[layers.shapes]]
+kind = "rectangle"
+count = 6
+center = [0.5, 0.5]
+spread = [0.53, 0.45]
+size = [0.095, 0.095]
+size_jitter = 0.65
+color = "#f2f1f8"
+opacity = 0.65
+outline = 0.018
+motion = "orbit"
+radius = [0.09, 0.10]
+period = 150.0
+spin = -0.0125
+[layers.shapes.audio]
+signal = "bass"
+speed = 3.0
+size = 0.3
+spin = -0.0375
+attack = 0.005
+decay = 0.15
+
+
+[[layers]]
+name = "focal-outline"
+opacity = 0.85
+
+[[layers.shapes]]
+kind = "triangle"
+center = [0.53, 0.5]
+size = [0.39, 0.39]
+color = "#e7e7ef"
+opacity = 0.85
+outline = 0.009
+motion = "orbit"
+radius = [0.055, 0.07]
+period = 120.0
+spin = 0.0083333333
+[layers.shapes.audio]
+signal = "bass"
+speed = 3.0
+size = 0.3
+spin = 0.025
+attack = 0.005
+decay = 0.15
+
+
+[[layers.shapes]]
+kind = "triangle"
+center = [0.53, 0.5]
+size = [0.34, 0.34]
+color = "#b0b2c2"
+opacity = 0.34
+outline = 0.008
+motion = "orbit"
+radius = [0.055, 0.07]
+period = 120.0
+spin = -0.0083333333
+rotation = 30.0
+[layers.shapes.audio]
+signal = "bass"
+speed = 3.0
+size = 0.3
+spin = -0.025
+attack = 0.005
+decay = 0.15

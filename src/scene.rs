@@ -60,6 +60,8 @@ pub struct Scene {
     pub fps: u32,
     #[serde(default)]
     pub loop_seconds: Option<f64>,
+    /// Keep relative shape area proportional to viewport area, calibrated at this aspect ratio.
+    #[serde(default)] pub size_reference_aspect: Option<f32>,
     #[serde(default)]
     pub seed: u64,
     #[serde(default = "black")]
@@ -90,6 +92,8 @@ pub struct ShapeAudio {
     #[serde(default)] pub size: f32,
     #[serde(default)] pub position: [f32;2],
     #[serde(default)] pub spin: f64,
+    /// Additional motion speed as a multiple of the base rate.
+    #[serde(default)] pub speed: f64,
     #[serde(default)] pub color: Option<String>,
     #[serde(default)] pub opacity: f32,
 }
@@ -238,6 +242,8 @@ pub struct Shape {
     pub sides: u32,
     #[serde(default)]
     pub motion: Motion,
+    /// Reverse horizontal wrap travel without changing the period.
+    #[serde(default)] pub wrap_left: bool,
     #[serde(default = "radius_default")]
     pub radius: [f32; 2],
     #[serde(default)] pub direction: Direction,
@@ -296,6 +302,8 @@ pub struct Effect {
     pub kind: EffectKind,
     #[serde(default = "default_true")]
     pub continuous: bool,
+    #[serde(default)]
+    pub glitch_style: GlitchStyle,
     #[serde(default = "intensity_default")]
     pub intensity: f32,
     #[serde(default = "period_default")]
@@ -324,6 +332,14 @@ pub enum EffectKind {
     Blur,
     Grid,
     Custom,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlitchStyle {
+    #[default]
+    Legacy,
+    Fine,
 }
 
 #[repr(C)]
@@ -370,6 +386,9 @@ impl Scene {
     }
     pub fn validate(&self, base: &Path) -> Result<()> {
         if !(0.25..=4.0).contains(&self.audio.sensitivity) { bail!("Audio sensitivity must be 0.25..=4"); }
+        if let Some(aspect) = self.size_reference_aspect {
+            if !(0.1..=10.0).contains(&aspect) { bail!("size_reference_aspect must be 0.1..=10"); }
+        }
         if !(1..=240).contains(&self.fps) {
             bail!("fps must be 1..=240");
         }
@@ -426,7 +445,7 @@ impl Scene {
                 }
                 if let Some(a) = &shape.audio {
                     a.response().validate()?;
-                    if !(-0.99..=10.0).contains(&a.size) || !(-1.0..=1.0).contains(&a.opacity) || !(-100.0..=100.0).contains(&a.spin) || !a.position.iter().all(|p| (-1.0..=1.0).contains(p)) { bail!("Invalid shape audio modulation range"); }
+                    if !(-0.99..=10.0).contains(&a.size) || !(-1.0..=1.0).contains(&a.opacity) || !(-100.0..=100.0).contains(&a.spin) || !(-1.0..=20.0).contains(&a.speed) || !a.position.iter().all(|p| (-1.0..=1.0).contains(p)) { bail!("Invalid shape audio modulation range"); }
                     if let Some(color) = &a.color { parse_color(color)?; if shape.preserve_color { bail!("Audio color requires a tinted sprite or analytic shape"); } }
                 }
                 match shape.kind {
@@ -530,6 +549,7 @@ impl Scene {
     pub fn instances_with_audio(&self, t: f64, width: f32, height: f32, pixel_scale: f32, audio: &audio::Frame) -> Vec<LayerInstances> {
         assert!(width > 0.0 && height > 0.0 && pixel_scale > 0.0);
         let aspect = width / height;
+        let relative_scale = self.size_reference_aspect.map_or(1.0, |reference| (aspect / reference).sqrt());
         let t = self.time(t);
         self.layers
             .iter()
@@ -542,12 +562,14 @@ impl Scene {
                     let mut audio_size = 1.0;
                     let mut audio_opacity = shape.opacity;
                     let mut audio_spin = 0.;
+                    let mut audio_motion_time = 0.;
                     let mut audio_position = [0.;2];
                     if let Some(a) = &shape.audio {
                         let v = modulation.value;
                         audio_size += a.size*v;
                         audio_opacity = (shape.opacity+a.opacity*v).clamp(0.,1.);
                         audio_spin = (a.spin*modulation.integral).rem_euclid(1.);
+                        audio_motion_time = a.speed * modulation.integral;
                         audio_position = [a.position[0]*v,a.position[1]*v];
                         if let Some(target) = &a.color {
                             let target = parse_color(target).expect("validated audio color");
@@ -556,7 +578,7 @@ impl Scene {
                     }
                     let origin = shape.origin.unwrap_or_default();
                     let attachment = shape.attachment.unwrap_or(origin).point();
-                    let size = match shape.size_unit { Unit::Relative => shape.size, Unit::Px => [shape.size[0]*pixel_scale/height, shape.size[1]*pixel_scale/height] };
+                    let size = match shape.size_unit { Unit::Relative => [shape.size[0]*relative_scale, shape.size[1]*relative_scale], Unit::Px => [shape.size[0]*pixel_scale/height, shape.size[1]*pixel_scale/height] };
                     let center = if shape.position.is_some() || shape.origin.is_some() {
                         let p = origin.point();
                         let mut offset = shape.position.unwrap_or([0.,0.]);
@@ -602,10 +624,11 @@ impl Scene {
                         let mut y = center[1] + shape.spread[1] * (2.0 * r(2) - 1.0) as f32;
                         let phase = (shape.phase + if shape.count > 1 { r(3) } else { 0.0 }) * TAU;
                         let rate = cyclic_rate(1.0 / shape.period, self.loop_seconds);
-                        let a = TAU * rate * t + phase;
+                        let motion_cycles = rate * t + (rate * audio_motion_time).rem_euclid(1.);
+                        let a = TAU * motion_cycles + phase;
                         let mut motion_angle = 0.0;
                         let mut motion_alpha = 1.0;
-                        let progress = (rate * t + phase / TAU).rem_euclid(1.0) as f32;
+                        let progress = (motion_cycles + phase / TAU).rem_euclid(1.0) as f32;
                         match shape.motion {
                             Motion::Static => {}
                             Motion::Orbit => {
@@ -637,7 +660,8 @@ impl Scene {
                             }
                             Motion::Wrap => {
                                 // Travel horizontally; shader draws edge copies for a continuous wrap.
-                                x = (x + (rate * t) as f32).rem_euclid(1.0);
+                                let direction = if shape.wrap_left { -1.0 } else { 1.0 };
+                                x = (x + (direction * motion_cycles) as f32).rem_euclid(1.0);
                                 y += shape.radius[1] * a.sin() as f32;
                             }
                         }
@@ -776,6 +800,7 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
             bail!("Effect spacing must be > 0");
         }
 
+        if e.glitch_style != GlitchStyle::Legacy && e.kind != EffectKind::Glitch { bail!("glitch_style is only valid for glitch effects"); }
         parse_color(&e.color)?;
         // Keep existing scenes compatible, but surface parameters that have no effect.
         if e.kind != EffectKind::Custom {
@@ -827,9 +852,55 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
+    }
+    #[test]
+    fn relative_area_is_stable_across_aspects_when_enabled() {
+        let scene: Scene = toml::from_str(r#"
+size_reference_aspect = 1.7777778
+[[layers]]
+name = "shape"
+[[layers.shapes]]
+kind = "circle"
+size = [0.2,0.2]
+"#).unwrap();
+        let landscape = scene.instances_for_viewport(0.,1920.,1080.,1.);
+        let portrait = scene.instances_for_viewport(0.,1080.,1920.,1.);
+        let a = landscape[0].over[0].center_size;
+        let b = portrait[0].over[0].center_size;
+        assert!((a[2]-0.2).abs()<1e-6);
+        assert!((b[2]-0.1125).abs()<1e-6);
+        assert!((a[2]*a[3]/(1920./1080.)-b[2]*b[3]/(1080./1920.)).abs()<1e-6);
+        assert_eq!(a[0..2],b[0..2]);
+    }
+    #[test]
+    fn wrap_left_and_audio_speed_are_continuous() {
+        let s: Scene = toml::from_str(r#"
+[[layers]]
+name = "stars"
+[[layers.shapes]]
+kind = "circle"
+motion = "wrap"
+wrap_left = true
+radius = [0.0,0.0]
+period = 10.0
+[layers.shapes.audio]
+signal = "bass"
+speed = 2.0
+attack = 0.0
+decay = 0.0
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
+        let responses = s.audio_responses();
+        let mut frame = audio::Frame::default();
+        let x = |t, f: &audio::Frame| s.instances_with_audio(t,100.,100.,1.,f)[0].over[0].center_size[0];
+        assert!((x(1.,&frame)-0.4).abs()<1e-6);
+        frame.advance(audio::Signals { bass: 1., ..Default::default() },&responses,1.,true);
+        assert!((x(1.,&frame)-0.2).abs()<1e-6);
+        frame.advance(audio::Signals::default(),&responses,1.,true);
+        assert!((x(2.,&frame)-0.1).abs()<1e-6);
     }
     #[test]
     fn spectrum_bars_grow_from_fixed_bottom_and_hide_in_silence() {
@@ -864,6 +935,9 @@ logarithmic = false
     fn glitch_and_audio_defaults_are_opt_out() {
         let effect: Effect = toml::from_str("kind = \"glitch\"").unwrap();
         assert!(effect.continuous);
+        assert_eq!(effect.glitch_style, GlitchStyle::Legacy);
+        let fine: Effect = toml::from_str("kind = \"glitch\"\nglitch_style = \"fine\"").unwrap();
+        assert_eq!(fine.glitch_style, GlitchStyle::Fine);
         let effect: Effect = toml::from_str("kind = \"glitch\"\ncontinuous = false").unwrap();
         assert!(!effect.continuous);
         let shape: ShapeAudio = toml::from_str("signal = \"bass\"").unwrap();
