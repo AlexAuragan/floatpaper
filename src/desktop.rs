@@ -59,6 +59,7 @@ struct RenderSurface { surface:wgpu::Surface<'static>, config:wgpu::SurfaceConfi
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
 struct RenderKey {
+    scale:u32,
     width:u32,
     height:u32,
     format:wgpu::TextureFormat,
@@ -66,8 +67,8 @@ struct RenderKey {
     isolated:Option<u32>,
 }
 impl RenderKey {
-    fn new(config:&wgpu::SurfaceConfiguration,id:u32,share:bool)->Self {
-        Self {width:config.width,height:config.height,format:config.format,
+    fn new(config:&wgpu::SurfaceConfiguration,id:u32,share:bool,scale:u32)->Self {
+        Self {scale,width:config.width,height:config.height,format:config.format,
             isolated:if share {None} else {Some(id)}}
     }
     fn label(self)->String {
@@ -216,6 +217,7 @@ type RenderPool=HashMap<RenderKey,RenderGroup>;
 
 fn new_group(gpu:&Gpu,scene:&Scene,base:&Path,key:RenderKey,shared:bool)->Result<RenderGroup> {
     let mut renderer=Renderer::new(gpu,scene.clone(),base,key.width,key.height,key.format)?;
+    renderer.set_pixel_scale(key.scale);
     renderer.enable_profile(gpu,key.label());
     let shared=if shared {Some(SharedFrame::new(gpu,key)?)} else {None};
     Ok(RenderGroup{renderer,shared})
@@ -226,7 +228,7 @@ fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene
     for (&id,screen) in &state.surfaces {
         if screen.closed {continue;}
         if let Some(r)=&screen.render {
-            *counts.entry(RenderKey::new(&r.config,id,share)).or_default()+=1;
+            *counts.entry(RenderKey::new(&r.config,id,share,screen.scale as u32)).or_default()+=1;
         }
     }
     pool.retain(|key,_|counts.contains_key(key));
@@ -478,7 +480,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             if state.clock.paused() && screen.last_frame.is_some() { continue; }
             if !screen.ready || !benchmark.should_present(screen.last_frame) { continue; }
             let r=screen.render.as_ref().context("Surface not configured")?;
-            let key=RenderKey::new(&r.config,id,share);
+            let key=RenderKey::new(&r.config,id,share,screen.scale as u32);
             let group=pool.get_mut(&key).context("Missing render group")?;
             if let Some(last)=screen.last_frame {
                 let remaining=interval.saturating_sub(now.saturating_duration_since(last));
@@ -730,12 +732,12 @@ mod sharing_tests {
     fn matching_dimensions_and_format_share_but_other_outputs_do_not() {
         let a=config();
         let mut b=a.clone();
-        assert_eq!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
-        assert_ne!(RenderKey::new(&a,1,false),RenderKey::new(&b,2,false));
+        assert_eq!(RenderKey::new(&a,1,true,1),RenderKey::new(&b,2,true,1));
+        assert_ne!(RenderKey::new(&a,1,false,1),RenderKey::new(&b,2,false,1));
         b.format=wgpu::TextureFormat::Rgba8UnormSrgb;
-        assert_ne!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
+        assert_ne!(RenderKey::new(&a,1,true,1),RenderKey::new(&b,2,true,1));
         b=a.clone();b.width=1440;b.height=2560;
-        assert_ne!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
+        assert_ne!(RenderKey::new(&a,1,true,1),RenderKey::new(&b,2,true,1));
     }
     #[test]
     fn benchmark_modes_control_rendering_and_presentation_independently() {
