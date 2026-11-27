@@ -28,6 +28,20 @@ struct VertexOut {
 }
 @fragment fn fs_main(input: VertexOut) -> @location(0) vec4<f32> {
     let p = input.local;
+    // Derivatives are evaluated outside the shape-dependent branch.
+    let ray_aa = max(fwidth(p), vec2(0.0001));
+    if input.params.y > 3.5 {
+        // Local +X is the ray head. Width includes the optional soft halo.
+        let u = clamp(p.x * 0.5 + 0.5, 0.0, 1.0);
+        let end_mask = 1.0 - smoothstep(1.0 - ray_aa.x, 1.0 + ray_aa.x, abs(p.x));
+        let core_width = mix(0.88, 0.25, input.params.w);
+        let core = 1.0 - smoothstep(core_width - ray_aa.y, core_width + ray_aa.y, abs(p.y));
+        let soft = pow(max(0.0, 1.0 - abs(p.y)), 2.0) * input.params.w * 0.45;
+        let coverage = clamp(core + soft, 0.0, 1.0) * end_mask
+            * mix(1.0, u, input.params.z);
+        let alpha = input.color.a * coverage;
+        return vec4(input.color.rgb * alpha, alpha);
+    }
     var d = length(p)-1.0;
     if input.params.y > 0.5 && input.params.y < 1.5 {
         let q = abs(p)-vec2(1.0);
