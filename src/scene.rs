@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use bytemuck::{Pod, Zeroable};
 use serde::Deserialize;
 use std::{
+    collections::BTreeMap,
     f64::consts::TAU,
     fs,
     path::{Path, PathBuf},
@@ -65,6 +66,8 @@ pub struct Scene {
     pub effects: Vec<Effect>,
     #[serde(default)]
     pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub anchors: BTreeMap<String, Anchor>,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -86,6 +89,7 @@ pub enum ShapeKind {
     Rectangle,
     Triangle,
     Polygon,
+    Ray,
     Svg,
     Text,
 }
@@ -100,7 +104,20 @@ pub enum Motion {
     Orbit,
     Drift,
     Wrap,
+    Radial,
+    Linear,
 }
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction { #[default] Inward, Outward }
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Anchor {
+    #[serde(default = "center_default")] pub center: [f32; 2],
+}
+fn angle_spread_default() -> f64 { 360.0 }
+fn travel_default() -> [f32; 2] { [1.0, 0.0] }
+fn recycle_fade_default() -> f32 { 0.15 }
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShapeComposite {
@@ -116,6 +133,8 @@ pub struct Shape {
     pub count: u32,
     #[serde(default = "center_default")]
     pub center: [f32; 2],
+    #[serde(default)] pub anchor: Option<String>,
+    #[serde(default)] pub anchor_offset: [f32; 2],
     #[serde(default)]
     pub spread: [f32; 2],
     #[serde(default = "size_default")]
@@ -135,6 +154,14 @@ pub struct Shape {
     pub motion: Motion,
     #[serde(default = "radius_default")]
     pub radius: [f32; 2],
+    #[serde(default)] pub direction: Direction,
+    #[serde(default)] pub heading: f64,
+    #[serde(default = "angle_spread_default")] pub angle_spread: f64,
+    #[serde(default = "travel_default")] pub travel: [f32; 2],
+    #[serde(default)] pub align_to_motion: bool,
+    #[serde(default = "recycle_fade_default")] pub recycle_fade: f32,
+    #[serde(default)] pub fade: f32,
+    #[serde(default)] pub glow: f32,
     /// Requested period in seconds; snapped to a whole number of cycles for looping scenes.
     #[serde(default = "period_default")]
     pub period: f64,
@@ -243,6 +270,9 @@ impl Scene {
             bail!("Scene background must be opaque");
         }
         validate_effects(&self.effects, base)?;
+        for (name, anchor) in &self.anchors {
+            if name.trim().is_empty() || !anchor.center.iter().all(|v| v.is_finite() && v.abs() <= 100.0) { bail!("Invalid anchor {name}"); }
+        }
         for layer in &self.layers {
             unit(layer.opacity, "layer.opacity")?;
             parse_color(&layer.background)?;
@@ -266,6 +296,19 @@ impl Scene {
                 }
                 if shape.kind.is_sprite() && shape.outline != 0.0 { bail!("Sprite shapes do not support analytic outline"); }
                 unit(shape.opacity, "shape.opacity")?;
+                unit(shape.fade, "shape.fade")?;
+                unit(shape.glow, "shape.glow")?;
+                if !(0.0..=0.5).contains(&shape.recycle_fade) { bail!("recycle_fade must be in [0,0.5]"); }
+                if !(0.0..=360.0).contains(&shape.angle_spread) || !shape.heading.is_finite() || shape.heading.abs() > 1e6 { bail!("Invalid motion heading or angle_spread"); }
+                if !shape.travel.iter().chain(&shape.anchor_offset).all(|v| v.is_finite() && v.abs() <= 100.0) { bail!("Invalid travel or anchor_offset"); }
+                if let Some(name) = &shape.anchor {
+                    if !self.anchors.contains_key(name) { bail!("Unknown shape anchor: {name}"); }
+                } else if shape.anchor_offset != [0.0, 0.0] { bail!("anchor_offset requires anchor"); }
+                if !matches!(shape.kind, ShapeKind::Ray) && (shape.fade != 0.0 || shape.glow != 0.0) { bail!("fade and glow require ray shape"); }
+                if matches!(shape.kind, ShapeKind::Ray) && shape.outline != 0.0 { bail!("Ray shapes do not support outline"); }
+                if matches!(shape.motion, Motion::Radial) && !(shape.radius[0] >= 0.0 && shape.radius[1] > shape.radius[0]) { bail!("Radial radius must be [inner, outer] with 0 <= inner < outer"); }
+                if matches!(shape.motion, Motion::Linear) && shape.travel == [0.0, 0.0] { bail!("Linear travel must be nonzero"); }
+                if shape.align_to_motion && !matches!(shape.motion, Motion::Radial | Motion::Linear) { bail!("align_to_motion requires radial or linear motion"); }
                 unit(shape.outline, "shape.outline")?;
                 unit(shape.size_jitter, "shape.size_jitter")?;
                 unit(shape.pulse, "shape.pulse")?;
@@ -311,6 +354,10 @@ impl Scene {
         }
     }
     pub fn instances(&self, t: f64) -> Vec<LayerInstances> {
+        self.instances_for_aspect(t, 1.0)
+    }
+    pub fn instances_for_aspect(&self, t: f64, aspect: f32) -> Vec<LayerInstances> {
+        assert!(aspect.is_finite() && aspect > 0.0);
         let t = self.time(t);
         self.layers
             .iter()
@@ -319,6 +366,10 @@ impl Scene {
                 let mut out = LayerInstances::default();
                 for (si, shape) in layer.shapes.iter().enumerate() {
                     let color = parse_color(&shape.color).expect("validated color");
+                    let center = match &shape.anchor {
+                        Some(name) => { let a = &self.anchors[name]; [a.center[0] + shape.anchor_offset[0], a.center[1] + shape.anchor_offset[1]] },
+                        None => shape.center,
+                    };
                     for i in 0..shape.count {
                         let key = self.seed
                             ^ (li as u64).wrapping_mul(0xD6E8FEB86659FD93)
@@ -326,11 +377,14 @@ impl Scene {
                             ^ (i as u64).wrapping_mul(0xE7037ED1A0B428DB);
                         let r =
                             |n: u64| random(key.wrapping_add(n.wrapping_mul(0x9E3779B97F4A7C15)));
-                        let mut x = shape.center[0] + shape.spread[0] * (2.0 * r(1) - 1.0) as f32;
-                        let mut y = shape.center[1] + shape.spread[1] * (2.0 * r(2) - 1.0) as f32;
+                        let mut x = center[0] + shape.spread[0] * (2.0 * r(1) - 1.0) as f32;
+                        let mut y = center[1] + shape.spread[1] * (2.0 * r(2) - 1.0) as f32;
                         let phase = (shape.phase + if shape.count > 1 { r(3) } else { 0.0 }) * TAU;
                         let rate = cyclic_rate(1.0 / shape.period, self.loop_seconds);
                         let a = TAU * rate * t + phase;
+                        let mut motion_angle = 0.0;
+                        let mut motion_alpha = 1.0;
+                        let progress = (rate * t + phase / TAU).rem_euclid(1.0) as f32;
                         match shape.motion {
                             Motion::Static => {}
                             Motion::Orbit => {
@@ -344,6 +398,22 @@ impl Scene {
                                     * (0.7 * (2.0 * a + r(5) * TAU).cos() + 0.3 * (5.0 * a).sin())
                                         as f32;
                             }
+                            Motion::Radial => {
+                                let heading = (shape.heading + if shape.count > 1 { (r(8) - 0.5) * shape.angle_spread } else { 0.0 }).to_radians();
+                                let inward = matches!(shape.direction, Direction::Inward);
+                                let u = if inward { 1.0 - progress } else { progress };
+                                let distance = shape.radius[0] + (shape.radius[1] - shape.radius[0]) * u;
+                                x += distance * heading.cos() as f32 / aspect;
+                                y += distance * heading.sin() as f32;
+                                motion_angle = heading + if inward { TAU * 0.5 } else { 0.0 };
+                                motion_alpha = recycle_envelope(progress, shape.recycle_fade);
+                            }
+                            Motion::Linear => {
+                                x += shape.travel[0] * (progress - 0.5) / aspect;
+                                y += shape.travel[1] * (progress - 0.5);
+                                motion_angle = f64::from(shape.travel[1]).atan2(f64::from(shape.travel[0]));
+                                motion_alpha = recycle_envelope(progress, shape.recycle_fade);
+                            }
                             Motion::Wrap => {
                                 // Travel horizontally; shader draws edge copies for a continuous wrap.
                                 x = (x + (rate * t) as f32).rem_euclid(1.0);
@@ -353,7 +423,7 @@ impl Scene {
                         let jitter = 1.0 + shape.size_jitter * (2.0 * r(6) - 1.0) as f32;
                         let scale = jitter.max(0.01)
                             * (1.0 - shape.pulse * 0.5 + shape.pulse * 0.5 * a.sin() as f32);
-                        let alpha = color[3] * shape.opacity;
+                        let alpha = color[3] * shape.opacity * motion_alpha;
                         let angle_offset = if shape.count > 1 {
                             match shape.rotation_jitter {
                                 Some(jitter) => jitter * (2.0 * r(7) - 1.0) / 360.0,
@@ -365,19 +435,20 @@ impl Scene {
                         let angle = (shape.rotation / 360.0
                             + cyclic_rate(shape.spin, self.loop_seconds) * t
                             + angle_offset)
-                            * TAU;
+                            * TAU + if shape.align_to_motion { motion_angle } else { 0.0 };
                         let (kind, sides) = match shape.kind {
                             ShapeKind::Circle => (0., 3.),
                             ShapeKind::Rectangle => (1., 4.),
                             ShapeKind::Triangle => (2., 3.),
                             ShapeKind::Polygon => (2., shape.sides as f32),
+                            ShapeKind::Ray => (4., shape.fade),
                             // Shape index identifies the immutable texture within this layer.
                             ShapeKind::Svg | ShapeKind::Text => (3., si as f32),
                         };
                         let instance = Instance {
                             center_size: [x, y, shape.size[0] * scale, shape.size[1] * scale],
                             color: [color[0], color[1], color[2], alpha],
-                            params: [angle.rem_euclid(TAU) as f32, kind, sides, if shape.preserve_color { 1.0 } else { shape.outline }],
+                            params: [angle.rem_euclid(TAU) as f32, kind, sides, if matches!(shape.kind, ShapeKind::Ray) { shape.glow } else if shape.preserve_color { 1.0 } else { shape.outline }],
                         };
                         match shape.composite {
                             ShapeComposite::Over => out.over.push(instance),
@@ -399,6 +470,12 @@ impl Scene {
             })
             .collect()
     }
+}
+
+fn recycle_envelope(progress: f32, fade: f32) -> f32 {
+    if fade == 0.0 { return 1.0; }
+    let p = (progress.min(1.0 - progress) / fade).clamp(0.0, 1.0);
+    p * p * (3.0 - 2.0 * p)
 }
 
 pub fn cyclic_rate(rate: f64, duration: Option<f64>) -> f64 {
@@ -546,6 +623,44 @@ rotation_jitter = 8.0
             bytemuck::cast_slice::<Instance, u8>(&a[1].cutout),
             bytemuck::cast_slice::<Instance, u8>(&b[1].cutout)
         );
+    }
+    #[test]
+    fn radial_and_linear_motion_align_in_pixel_space() {
+        let s: Scene = toml::from_str(r#"
+loop_seconds = 10.0
+[anchors.ship]
+center = [0.7, 0.6]
+[[layers]]
+name = "rays"
+[[layers.shapes]]
+kind = "ray"
+anchor = "ship"
+motion = "radial"
+heading = 180.0
+radius = [0.1, 0.9]
+period = 10.0
+align_to_motion = true
+fade = 1.0
+[[layers.shapes]]
+kind = "ray"
+motion = "linear"
+travel = [0.4, 0.2]
+period = 10.0
+align_to_motion = true
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
+        let a = s.instances_for_aspect(2.5, 2.0);
+        let b = s.instances_for_aspect(5.0, 2.0);
+        let ray = a[0].over[0];
+        assert!((ray.center_size[0] - 0.4).abs() < 1e-6);
+        assert!((ray.center_size[1] - 0.6).abs() < 1e-6);
+        assert!((ray.params[0].cos() - 1.0).abs() < 1e-6);
+        assert!(b[0].over[0].center_size[0] > ray.center_size[0]);
+        let l = a[0].over[1];
+        assert!((l.params[0] - 0.5f32.atan()).abs() < 1e-6);
+        assert_eq!(s.instances_for_aspect(0.0, 2.0)[0].over[0].color[3], 0.0);
+        let end = s.instances_for_aspect(12.5, 2.0);
+        assert_eq!(bytemuck::cast_slice::<Instance,u8>(&a[0].over), bytemuck::cast_slice::<Instance,u8>(&end[0].over));
     }
     #[test]
     fn scene_repeats() {
