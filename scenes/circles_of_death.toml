@@ -3,7 +3,7 @@ fps = 30
 loop_seconds = 120.0
 seed = 671
 background = "#14090d"
-effects = [{ kind = "custom", shader = "../shaders/battle_snow.wgsl", intensity = 0.48, period = 12.0 }, { kind = "custom", shader = "../shaders/custom_vignette.wgsl", intensity = 0.32 }]
+effects = [{ kind = "custom", shader = "../shaders/snow_1.wgsl", intensity = 0.65, spacing = 48, rotation = -18, color = "#999093", period = 24.0 }, { kind = "custom", shader = "../shaders/custom_vignette.wgsl", intensity = 0.32 }]
 
 [[layers]]
 name = "crimson atmosphere"
@@ -28,7 +28,7 @@ opacity = 0.32
 
 [[layers]]
 name = "distant weapons"
-effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.45, spacing = 85, rotation = -12, color = "#4c3840" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.45, spacing = 85, rotation = -12, color = "#68505a" }]
 [[layers.shapes]]
 kind = "svg"
 path = "assets/battle_field_distant.svg"
@@ -40,7 +40,7 @@ raster_size = 2048
 
 [[layers]]
 name = "middle weapons"
-effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.55, spacing = 105, rotation = -12, color = "#4c3840" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.55, spacing = 105, rotation = -12, color = "#68505a" }]
 [[layers.shapes]]
 kind = "svg"
 path = "assets/battle_field_middle.svg"
@@ -52,7 +52,7 @@ raster_size = 2048
 
 [[layers]]
 name = "foreground weapons"
-effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.75, spacing = 135, rotation = -12, color = "#4c3840" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.75, spacing = 135, rotation = -12, color = "#68505a" }]
 [[layers.shapes]]
 kind = "svg"
 path = "assets/battle_field_foreground.svg"
@@ -67,10 +67,11 @@ name = "abandoned machine"
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/battle_gear.svg"
+path = "assets/battle_gear_weathered.svg"
 center = [1.0,1.0]
 size = [0.82,0.82]
-color = "#040305"
+color = "#ffffff"
+preserve_color = true
 spin = 0.0083333333
 raster_size = 768
 
