@@ -41,6 +41,8 @@ spin = 0.004
 rotation = 0.0
 rotation_jitter = 180.0
 pulse = 0.0
+[layers.shapes.audio]
+size = 0.1
 
 # =========================
 # Backmost panel: smallest + dimmest
