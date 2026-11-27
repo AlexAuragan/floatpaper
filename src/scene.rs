@@ -85,6 +85,7 @@ pub struct ShapeAudio {
     #[serde(default = "audio_attack")] pub attack: f32,
     #[serde(default = "audio_decay")] pub decay: f32,
     #[serde(default = "one")] pub power: f32,
+    #[serde(default)] pub frequency: Option<[f32; 2]>,
     #[serde(default)] pub size: f32,
     #[serde(default)] pub position: [f32;2],
     #[serde(default)] pub spin: f64,
@@ -94,7 +95,7 @@ pub struct ShapeAudio {
 fn audio_attack() -> f32 { 0.01 }
 fn audio_decay() -> f32 { 0.15 }
 impl ShapeAudio {
-    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay, power:self.power } }
+    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay, power:self.power, frequency:self.frequency } }
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -103,10 +104,11 @@ pub struct EffectAudio {
     #[serde(default = "audio_attack")] pub attack: f32,
     #[serde(default = "audio_decay")] pub decay: f32,
     #[serde(default = "one")] pub power: f32,
+    #[serde(default)] pub frequency: Option<[f32; 2]>,
     #[serde(default)] pub intensity: f32,
 }
 impl EffectAudio {
-    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay, power:self.power } }
+    pub fn response(&self) -> Response { Response { signal:self.signal, attack:self.attack, decay:self.decay, power:self.power, frequency:self.frequency } }
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
