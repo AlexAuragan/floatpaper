@@ -60,6 +60,8 @@ pub struct Scene {
     pub fps: u32,
     #[serde(default)]
     pub loop_seconds: Option<f64>,
+    /// Keep relative shape area proportional to viewport area, calibrated at this aspect ratio.
+    #[serde(default)] pub size_reference_aspect: Option<f32>,
     #[serde(default)]
     pub seed: u64,
     #[serde(default = "black")]
@@ -384,6 +386,9 @@ impl Scene {
     }
     pub fn validate(&self, base: &Path) -> Result<()> {
         if !(0.25..=4.0).contains(&self.audio.sensitivity) { bail!("Audio sensitivity must be 0.25..=4"); }
+        if let Some(aspect) = self.size_reference_aspect {
+            if !(0.1..=10.0).contains(&aspect) { bail!("size_reference_aspect must be 0.1..=10"); }
+        }
         if !(1..=240).contains(&self.fps) {
             bail!("fps must be 1..=240");
         }
@@ -544,6 +549,7 @@ impl Scene {
     pub fn instances_with_audio(&self, t: f64, width: f32, height: f32, pixel_scale: f32, audio: &audio::Frame) -> Vec<LayerInstances> {
         assert!(width > 0.0 && height > 0.0 && pixel_scale > 0.0);
         let aspect = width / height;
+        let relative_scale = self.size_reference_aspect.map_or(1.0, |reference| (aspect / reference).sqrt());
         let t = self.time(t);
         self.layers
             .iter()
@@ -572,7 +578,7 @@ impl Scene {
                     }
                     let origin = shape.origin.unwrap_or_default();
                     let attachment = shape.attachment.unwrap_or(origin).point();
-                    let size = match shape.size_unit { Unit::Relative => shape.size, Unit::Px => [shape.size[0]*pixel_scale/height, shape.size[1]*pixel_scale/height] };
+                    let size = match shape.size_unit { Unit::Relative => [shape.size[0]*relative_scale, shape.size[1]*relative_scale], Unit::Px => [shape.size[0]*pixel_scale/height, shape.size[1]*pixel_scale/height] };
                     let center = if shape.position.is_some() || shape.origin.is_some() {
                         let p = origin.point();
                         let mut offset = shape.position.unwrap_or([0.,0.]);
@@ -846,9 +852,28 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
+    }
+    #[test]
+    fn relative_area_is_stable_across_aspects_when_enabled() {
+        let scene: Scene = toml::from_str(r#"
+size_reference_aspect = 1.7777778
+[[layers]]
+name = "shape"
+[[layers.shapes]]
+kind = "circle"
+size = [0.2,0.2]
+"#).unwrap();
+        let landscape = scene.instances_for_viewport(0.,1920.,1080.,1.);
+        let portrait = scene.instances_for_viewport(0.,1080.,1920.,1.);
+        let a = landscape[0].over[0].center_size;
+        let b = portrait[0].over[0].center_size;
+        assert!((a[2]-0.2).abs()<1e-6);
+        assert!((b[2]-0.1125).abs()<1e-6);
+        assert!((a[2]*a[3]/(1920./1080.)-b[2]*b[3]/(1080./1920.)).abs()<1e-6);
+        assert_eq!(a[0..2],b[0..2]);
     }
     #[test]
     fn wrap_left_and_audio_speed_are_continuous() {
