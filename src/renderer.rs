@@ -688,6 +688,7 @@ pub struct Renderer {
     height: u32,
     output_format: wgpu::TextureFormat,
     internal_format: wgpu::TextureFormat,
+    pixel_scale: f32,
     geometry: wgpu::RenderPipeline,
     geometry_cutout: wgpu::RenderPipeline,
     sprites: Option<SpriteGeometry>,
@@ -900,6 +901,7 @@ impl Renderer {
                 height,
                 output_format,
                 internal_format,
+                pixel_scale: 1.0,
                 geometry,
                 geometry_cutout,
                 sprites,
@@ -929,6 +931,14 @@ impl Renderer {
             return Err(anyhow!("GPU pipeline validation: {e}"));
         }
         result
+    }
+    pub fn set_pixel_scale(&mut self, scale: u32) {
+        assert!(scale > 0);
+        if self.pixel_scale != scale as f32 {
+            self.pixel_scale = scale as f32;
+            if let Some(cache) = &mut self.static_cache { cache.valid = false; }
+            if let Some(cache) = &mut self.prefix_cache { cache.valid = false; }
+        }
     }
     pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) -> Result<()> {
         if (width, height) == (self.width, self.height) {
@@ -992,7 +1002,7 @@ impl Renderer {
             profiler.prepare(gpu);
         }
         let t = self.scene.time(t);
-        let layer_instances = self.scene.instances_for_aspect(t, self.width as f32 / self.height as f32);
+        let layer_instances = self.scene.instances_for_viewport(t, self.width as f32, self.height as f32, self.pixel_scale);
         // Pack both instance groups into one buffer, recording each layer's draw ranges.
         let mut flat = Vec::new();
         let ranges: Vec<_> = layer_instances
