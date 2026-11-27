@@ -7,6 +7,8 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle};
 use std::{collections::{BTreeMap,HashMap}, path::{Path,PathBuf}, ptr::NonNull, sync::{Arc,atomic::{AtomicBool,Ordering},mpsc}, time::{Duration,Instant}};
 use wayland_client::{Connection,Dispatch,Proxy,QueueHandle,delegate_noop,protocol::{wl_callback,wl_compositor,wl_output,wl_region,wl_registry,wl_surface}};
+use std::{fs,os::unix::fs::{FileTypeExt,MetadataExt}};
+use wayland_protocols::wp::linux_dmabuf::zv1::client::{zwp_linux_dmabuf_v1,zwp_linux_dmabuf_feedback_v1};
 use wayland_protocols::xdg::shell::client::{xdg_surface,xdg_toplevel,xdg_wm_base};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1,zwlr_layer_surface_v1};
 
@@ -20,9 +22,12 @@ struct Desktop {
     outputs:BTreeMap<u32,Output>,
     surfaces:BTreeMap<u32,Screen>,
     removed:Vec<u32>,
+    want_dmabuf:bool,
+    main_device:Option<Vec<u8>>,
+    feedback_done:bool,
     quit:bool,
 }
-impl Default for Desktop { fn default()->Self { Self { compositor:None,layer_shell:None,wm_base:None,outputs:BTreeMap::new(),surfaces:BTreeMap::new(),removed:Vec::new(),quit:false } } }
+impl Default for Desktop { fn default()->Self { Self { compositor:None,layer_shell:None,wm_base:None,outputs:BTreeMap::new(),surfaces:BTreeMap::new(),removed:Vec::new(),want_dmabuf:false,main_device:None,feedback_done:false,quit:false } } }
 const PREVIEW:u32=0;
 struct Screen {
     // Drop wgpu surface before releasing native wl_surface (raw handles are borrowed).
@@ -238,6 +243,80 @@ fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene
     Ok(())
 }
 
+// The protocol sends a native-endian Linux dev_t. Resolve the DRM node
+// through sysfs rather than assuming card numbers or vendor preferences.
+fn decode_device(bytes:&[u8])->Result<u64> {
+    match bytes.len() {
+        8=>Ok(u64::from_ne_bytes(bytes.try_into()?)),
+        4=>Ok(u64::from(u32::from_ne_bytes(bytes.try_into()?))),
+        n=>bail!("Unexpected DMA-BUF device identity size: {n}"),
+    }
+}
+
+fn read_pci_id(path:&Path)->Result<u32> {
+    let value=fs::read_to_string(path).with_context(||format!("Read {}",path.display()))?;
+    u32::from_str_radix(value.trim().trim_start_matches("0x"),16)
+        .with_context(||format!("Invalid PCI ID in {}",path.display()))
+}
+
+fn compositor_pci_id(state:&Desktop)->Result<(u32,u32)> {
+    if !state.feedback_done {bail!("Compositor did not provide complete DMA-BUF feedback");}
+    let device=decode_device(state.main_device.as_deref().context("DMA-BUF feedback has no main device")?)?;
+    for entry in fs::read_dir("/dev/dri").context("Read DRM device nodes")? {
+        let entry=entry?;
+        let meta=entry.metadata()?;
+        if !meta.file_type().is_char_device() || meta.rdev()!=device {continue;}
+        let sysfs=Path::new("/sys/class/drm").join(entry.file_name()).join("device");
+        let vendor=read_pci_id(&sysfs.join("vendor"))?;
+        let model=read_pci_id(&sysfs.join("device"))?;
+        eprintln!("Compositor DMA-BUF device: {} (PCI {vendor:04x}:{model:04x})",entry.path().display());
+        return Ok((vendor,model));
+    }
+    bail!("No accessible DRM device node for compositor device {device:#x}")
+}
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum GpuChoice { Auto, LowPower, HighPerformance, Pci(u32,u32) }
+impl GpuChoice {
+    fn parse(value:&str)->Result<Self> {
+        match value {
+            "auto"=>Ok(Self::Auto),
+            "low-power"=>Ok(Self::LowPower),
+            "high-performance"=>Ok(Self::HighPerformance),
+            _=>{
+                let (vendor,device)=value.split_once(':').context(
+                    "FLOATPAPER_GPU must be auto, low-power, high-performance or vvvv:dddd")?;
+                if vendor.len()!=4 || device.len()!=4 {bail!("GPU PCI IDs must contain four hexadecimal digits each");}
+                Ok(Self::Pci(u32::from_str_radix(vendor,16).context("Invalid GPU vendor ID")?,
+                    u32::from_str_radix(device,16).context("Invalid GPU device ID")?))
+            }
+        }
+    }
+    fn from_env()->Result<Self> {
+        match std::env::var("FLOATPAPER_GPU") {
+            Ok(value)=>Self::parse(&value),
+            Err(std::env::VarError::NotPresent)=>Ok(Self::Auto),
+            Err(e)=>Err(e).context("Read FLOATPAPER_GPU"),
+        }
+    }
+    fn select(self,instance:&wgpu::Instance,surface:&wgpu::Surface<'_>,state:&Desktop)->Result<Gpu> {
+        match self {
+            Self::LowPower=>Gpu::with_preference(instance,Some(surface),wgpu::PowerPreference::LowPower),
+            Self::HighPerformance=>Gpu::with_preference(instance,Some(surface),wgpu::PowerPreference::HighPerformance),
+            Self::Pci(vendor,device)=>Gpu::from_adapter(Gpu::matching_pci_adapter(instance,surface,vendor,device)?),
+            Self::Auto=>{
+                match compositor_pci_id(state).and_then(|(vendor,device)|Gpu::matching_pci_adapter(instance,surface,vendor,device)) {
+                    Ok(adapter)=>{eprintln!("GPU selection: compositor PCI ID match");Gpu::from_adapter(adapter)},
+                    Err(e)=>{
+                        eprintln!("GPU selection: compositor match unavailable: {e:#}; falling back to low-power adapter");
+                        Gpu::new(instance,Some(surface))
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn run(path:&Path,mode:Mode)->Result<()> {
     let path=path.canonicalize().context("Scene path does not exist")?;
     let base=path.parent().context("Missing scene directory")?;
@@ -247,7 +326,10 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
     let mut queue=connection.new_event_queue::<Desktop>();
     let qh=queue.handle();
     let _registry=display.get_registry(&qh,());
+    let live=matches!(&mode,Mode::Live{..});
+    let gpu_choice=if live {GpuChoice::from_env()?} else {GpuChoice::LowPower};
     let mut state=Desktop::default();
+    state.want_dmabuf=live && gpu_choice==GpuChoice::Auto;
     queue.roundtrip(&mut state).context("Discover Wayland globals")?;
     queue.roundtrip(&mut state).context("Read output properties")?;
     if state.compositor.is_none() { bail!("No wl_compositor"); }
@@ -275,7 +357,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
     let instance=Gpu::instance();
     let first=state.surfaces.values().find(|s|!s.closed).context("All surfaces closed before GPU initialization")?;
     let first_surface=make_surface(&instance,&connection,&first.surface)?;
-    let gpu=Gpu::new(&instance,Some(&first_surface))?;
+    let gpu=gpu_choice.select(&instance,&first_surface,&state)?;
     drop(first_surface);
     let mut event_loop=EventLoop::<Desktop>::try_new().context("Create Wayland event loop")?;
     WaylandSource::new(connection.clone(),queue).insert(event_loop.handle()).map_err(|e|anyhow::anyhow!("Register Wayland source: {e}"))?;
@@ -485,6 +567,11 @@ impl Dispatch<wl_registry::WlRegistry,()> for Desktop {
                 "zwlr_layer_shell_v1"=>state.layer_shell=Some(registry.bind(name,version.min(4),qh,())),
                 "xdg_wm_base"=>state.wm_base=Some(registry.bind(name,version.min(3),qh,())),
                 "wl_output"=>{ let proxy=registry.bind(name,version.min(4),qh,name); state.outputs.insert(name,Output{proxy:Some(proxy),name:None,scale:1}); },
+                "zwp_linux_dmabuf_v1" if version>=4 && state.want_dmabuf=>{
+                    let dmabuf:zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1=registry.bind(name,4,qh,());
+                    dmabuf.get_default_feedback(qh,());
+                    dmabuf.destroy();
+                },
                 _=>{},
             },
             wl_registry::Event::GlobalRemove{name}=>{ if state.outputs.remove(&name).is_some() { state.removed.push(name); } },
@@ -492,6 +579,19 @@ impl Dispatch<wl_registry::WlRegistry,()> for Desktop {
         }
     }
 }
+impl Dispatch<zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,()> for Desktop {
+    fn event(state:&mut Self,feedback:&zwp_linux_dmabuf_feedback_v1::ZwpLinuxDmabufFeedbackV1,
+        event:zwp_linux_dmabuf_feedback_v1::Event,_:&(),_:&Connection,_:&QueueHandle<Self>) {
+        match event {
+            zwp_linux_dmabuf_feedback_v1::Event::MainDevice{device}=>state.main_device=Some(device),
+            zwp_linux_dmabuf_feedback_v1::Event::Done=>{state.feedback_done=true;feedback.destroy();},
+            // Format tables and tranches are not needed for adapter selection.
+            // Owned format-table file descriptors are dropped with their events.
+            _=>{},
+        }
+    }
+}
+delegate_noop!(Desktop: ignore zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1);
 impl Dispatch<wl_output::WlOutput,u32> for Desktop {
     fn event(state:&mut Self,_:&wl_output::WlOutput,event:wl_output::Event,id:&u32,_:&Connection,_:&QueueHandle<Self>) {
         let Some(output)=state.outputs.get_mut(id) else {return;};

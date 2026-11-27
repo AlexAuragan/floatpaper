@@ -40,12 +40,47 @@ impl Gpu {
         wgpu::Instance::new(wgpu::InstanceDescriptor::default())
     }
     pub fn new(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<Self> {
+        Self::with_preference(instance, surface, wgpu::PowerPreference::LowPower)
+    }
+
+    pub fn with_preference(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        power_preference: wgpu::PowerPreference,
+    ) -> Result<Self> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
+            power_preference,
             compatible_surface: surface,
             force_fallback_adapter: false,
         }))
         .context("No compatible GPU adapter. Check Vulkan/Mesa drivers")?;
+        Self::from_adapter(adapter)
+    }
+
+    // wgpu 0.19 exposes vendor/device IDs but not a DRM render-node identity.
+    // Restrict to Vulkan, for which these are PCI IDs, and reject ambiguity.
+    pub fn matching_pci_adapter(
+        instance: &wgpu::Instance,
+        surface: &wgpu::Surface<'_>,
+        vendor: u32,
+        device: u32,
+    ) -> Result<wgpu::Adapter> {
+        let mut matches = instance.enumerate_adapters(wgpu::Backends::VULKAN)
+            .into_iter().filter(|adapter| {
+                let info = adapter.get_info();
+                info.vendor == vendor && info.device == device
+                    && adapter.is_surface_supported(surface)
+            });
+        let adapter = matches.next().with_context(|| format!(
+            "No surface-compatible Vulkan adapter with PCI ID {vendor:04x}:{device:04x}"
+        ))?;
+        if matches.next().is_some() {
+            bail!("Ambiguous Vulkan adapter PCI ID {vendor:04x}:{device:04x}");
+        }
+        Ok(adapter)
+    }
+
+    pub fn from_adapter(adapter: wgpu::Adapter) -> Result<Self> {
         eprintln!(
             "GPU: {} ({:?}, {:?})",
             adapter.get_info().name,
