@@ -577,10 +577,19 @@ struct LayerPipeline {
 }
 // Sprite bind groups retain their textures. Assets are immutable for the
 // lifetime of a renderer; resize changes only the geometry viewport.
+struct CommandTexture {
+    texture: wgpu::Texture,
+    width: u32,
+    height: u32,
+    last: Option<String>,
+    valid: bool,
+}
 struct SpriteGeometry {
     over: wgpu::RenderPipeline,
     cutout: wgpu::RenderPipeline,
     assets: BTreeMap<(usize, usize), Vec<wgpu::BindGroup>>,
+    commands: BTreeMap<(usize, usize), CommandTexture>,
+    fonts: Option<cosmic_text::FontSystem>,
 }
 impl SpriteGeometry {
     fn new(gpu: &Gpu, scene: &Scene, base: &Path, viewport: &wgpu::Buffer,
@@ -623,6 +632,7 @@ impl SpriteGeometry {
         let over = pipeline(d, "sprite over", &shader, &layout, format, Some(BLEND), &buffers);
         let cutout = pipeline(d, "sprite cutout", &shader, &layout, format, Some(CUTOUT_BLEND), &buffers);
         let mut assets = BTreeMap::new();
+        let mut commands = BTreeMap::new();
         let mut fonts = None;
         let mut bytes = 0usize;
         for (li, layer) in scene.layers.iter().enumerate() {
@@ -634,7 +644,8 @@ impl SpriteGeometry {
                     crate::sprites::rasterize(shape, base, &mut fonts).map(|r| vec![r])
                 }.with_context(|| format!("Rasterize layer '{}' shape {si}", layer.name))?;
                 let mut bindings = Vec::with_capacity(rasters.len());
-                for mut raster in rasters {
+                let command = shape.text_source.as_ref().is_some_and(|name| scene.text_sources[name].is_command());
+                for (frame_index, mut raster) in rasters.into_iter().enumerate() {
                 bytes += raster.rgba.len();
                 if bytes > crate::sprites::MAX_BYTES { bail!("Sprite textures exceed 64 MiB per renderer"); }
                 check_size(gpu, raster.width, raster.height)?;
@@ -663,12 +674,15 @@ impl SpriteGeometry {
                     ],
                 });
                 bindings.push(bind);
+                if command && frame_index == 1 {
+                    commands.insert((li,si), CommandTexture { texture, width: raster.width, height: raster.height, last: None, valid: false });
+                }
                 }
                 assets.insert((li, si), bindings);
             }
         }
         eprintln!("Sprite assets: {} ({:.2} MiB)", assets.len(), bytes as f64 / 1048576.);
-        Ok(Some(Self { over, cutout, assets }))
+        Ok(Some(Self { over, cutout, assets, commands, fonts }))
     }
 }
 
@@ -943,6 +957,35 @@ impl Renderer {
         result
     }
     pub fn set_text_paused(&mut self, paused: bool) { self.text_paused = paused; }
+    pub fn update_command_text(&mut self, gpu: &Gpu, values: &crate::text_commands::Values) {
+        let Some(sprites) = &mut self.sprites else { return; };
+        for (&(li,si), asset) in &mut sprites.commands {
+            let shape = &self.scene.layers[li].shapes[si];
+            let name = shape.text_source.as_ref().expect("command source");
+            let value = values.get(name);
+            if asset.last.as_ref() == value { continue; }
+            asset.last = value.cloned();
+            asset.valid = false;
+            let Some(value) = value else { continue; };
+            let mut shape = shape.clone();
+            shape.text = Some(value.clone());
+            let result = crate::sprites::rasterize(&shape, Path::new("."), &mut sprites.fonts)
+                .and_then(|r| crate::sprites::fit_canvas(r, asset.width, asset.height));
+            match result {
+                Ok(mut raster) => {
+                    raster.premultiplied_linear_srgb();
+                    gpu.queue.write_texture(
+                        wgpu::ImageCopyTexture { texture: &asset.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                        &raster.rgba,
+                        wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(asset.width * 4), rows_per_image: Some(asset.height) },
+                        extent(asset.width, asset.height),
+                    );
+                    asset.valid = true;
+                }
+                Err(e) => eprintln!("Text command {name}: cannot display output: {e:#}; using default (increase layout if needed)"),
+            }
+        }
+    }
     pub fn set_pixel_scale(&mut self, scale: u32) {
         assert!(scale > 0);
         if self.pixel_scale != scale as f32 {
@@ -1095,6 +1138,7 @@ impl Renderer {
                                     pass.set_pipeline(if is_cutout { &sprites.cutout } else { &sprites.over });
                                     let frame = self.scene.layers[i].shapes[si].text_source.as_ref()
                                         .map_or(0, |name| self.scene.text_sources[name].frame(t, self.scene.loop_seconds, self.text_paused));
+                                    let frame = if !self.text_paused && sprites.commands.get(&(i, si)).is_some_and(|asset| asset.valid) { 1 } else { frame };
                                     pass.set_bind_group(0, &sprites.assets[&(i, si)][frame], &[]);
                                 } else {
                                     pass.set_pipeline(if is_cutout { &self.geometry_cutout } else { &self.geometry });
