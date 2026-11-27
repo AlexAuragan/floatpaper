@@ -283,6 +283,7 @@ pub struct Response {
     #[serde(default = "default_attack")] pub attack: f32,
     #[serde(default = "default_decay")] pub decay: f32,
     #[serde(default = "default_power")] pub power: f32,
+    #[serde(default)] pub logarithmic: bool,
     #[serde(default)] pub frequency: Option<[f32; 2]>,
 }
 impl Response {
@@ -291,6 +292,7 @@ impl Response {
             bail!("Audio attack must be 0..=5s and decay 0..=10s");
         }
         if !(0.1..=8.0).contains(&self.power) { bail!("Audio power must be 0.1..=8"); }
+        if self.logarithmic && self.power != 1.0 { bail!("Logarithmic audio response cannot be combined with nondefault power"); }
         match (self.signal, self.frequency) {
             (Signal::Band, Some([lo, hi])) if lo >= 0. && hi <= RATE*0.5 && hi-lo >= RATE/WINDOW as f32 => {},
             (Signal::Band, _) => bail!("Audio band requires frequency = [low, high] in Hz, within 0..24000 and at least 23.4375 Hz wide"),
@@ -299,9 +301,9 @@ impl Response {
         }
         Ok(())
     }
-    pub fn key(self) -> (Signal,u32,u32,u32,u32,u32) {
+    pub fn key(self) -> (Signal,u32,u32,u32,u32,u32,bool) {
         let [lo,hi] = self.frequency.unwrap_or([0.,0.]);
-        (self.signal,self.attack.to_bits(),self.decay.to_bits(),self.power.to_bits(),lo.to_bits(),hi.to_bits())
+        (self.signal,self.attack.to_bits(),self.decay.to_bits(),self.power.to_bits(),lo.to_bits(),hi.to_bits(),self.logarithmic)
     }
     fn input(self, signals: &Signals) -> f32 {
         if let Some([lo,hi]) = self.frequency {
@@ -326,7 +328,7 @@ pub struct Modulation { pub value: f32, pub integral: f64 }
 #[derive(Default)]
 pub struct Frame {
     pub signals: Signals,
-    values: std::collections::BTreeMap<(Signal,u32,u32,u32,u32,u32), Modulation>,
+    values: std::collections::BTreeMap<(Signal,u32,u32,u32,u32,u32,bool), Modulation>,
 }
 impl Frame {
     pub fn get(&self, response: Response) -> Modulation {
@@ -338,7 +340,7 @@ impl Frame {
             let state = self.values.entry(response.key()).or_default();
             if !active { state.value = 0.; continue; }
             let input = response.input(&signals).clamp(0.,1.);
-            let target = if response.power == 1.0 { input } else if response.power == 2.0 { input*input } else { input.powf(response.power) };
+            let target = if response.logarithmic { (9.0 * input).ln_1p() / std::f32::consts::LN_10 } else if response.power == 1.0 { input } else if response.power == 2.0 { input*input } else { input.powf(response.power) };
             let tau = if target > state.value { response.attack } else { response.decay } as f64;
             let old = state.value as f64;
             let target = target as f64;
@@ -435,7 +437,7 @@ mod tests {
     use super::*;
     #[test]
     fn custom_band_rejects_high_frequency_tone() {
-        let band = Response { signal: Signal::Band, attack: 0., decay: 0., power: 1., frequency: Some([40.,100.]) };
+        let band = Response { signal: Signal::Band, attack: 0., decay: 0., power: 1., logarithmic: false, frequency: Some([40.,100.]) };
         band.validate().unwrap();
         let mut a = Analyzer::new(1.);
         for block in 0..20 {
@@ -451,8 +453,18 @@ mod tests {
         assert!(band.input(&a.signals) < 0.01);
     }
     #[test]
+    fn logarithmic_response_preserves_endpoints_and_boosts_quiet_input() {
+        let response = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1., logarithmic: true, frequency: None };
+        response.validate().unwrap();
+        let mut frame = Frame::default();
+        for (volume, expected) in [(0.,0.), (0.5, 5.5_f32.ln()/std::f32::consts::LN_10), (1.,1.)] {
+            frame.advance(Signals { volume, ..Signals::default() }, &[response], 1., true);
+            assert!((frame.get(response).value-expected).abs()<1e-6);
+        }
+    }
+    #[test]
     fn response_power_is_applied_before_smoothing_and_integration() {
-        let linear = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1., frequency: None };
+        let linear = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1., logarithmic: false, frequency: None };
         let squared = Response { power: 2., ..linear };
         let mut frame = Frame::default();
         frame.advance(Signals { volume: 0.5, ..Signals::default() }, &[linear,squared], 1., true);
