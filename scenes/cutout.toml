@@ -1,0 +1,170 @@
+fps = 30
+loop_seconds = 300
+seed = 7
+background = "#050505"
+
+# Optional global effects
+effects = [
+  { kind = "noise", intensity = 0.02, period = 12.0, pulse = 0.0 },
+  { kind = "crt", intensity = 0.025, period = 20.0, pulse = 0.0 },
+]
+
+# =========================
+# Background moving geometry
+# =========================
+
+[[layers]]
+name = "background_shapes"
+opacity = 1.0
+background = "#00000000"
+effects = [{ kind = "glitch", intensity = 0.35, period = 48.0, pulse = 0.6 }]
+
+
+[[layers.shapes]]
+kind = "triangle"
+count = 16
+center = [0.5, 0.5]
+spread = [0.2, 0.2]
+size = [0.045, 0.045]
+size_jitter = 0.45
+color = "#ffffff"
+opacity = 1.0
+motion = "drift"
+radius = [0.03, 0.03]
+period = 36.0
+phase = 0.0
+spin = 0.004
+rotation = 0.0
+rotation_jitter = 180.0
+pulse = 0.0
+
+# =========================
+# Backmost panel: smallest + dimmest
+# =========================
+
+[[layers]]
+name = "panel_1_back"
+opacity = 1.0
+background = "#2a2a2a"
+effects = [
+    { kind = "grid", intensity= 1, period = 10, pulse = 0,  offset = [30, 8], rotation = -3, spacing = 28},
+    { kind = "blur", intensity = 0.35, period = 10.0, pulse = 0.0 }
+]
+
+[[layers.shapes]]
+kind = "rectangle"
+composite = "cutout"
+count = 1
+center = [0.5, 0.5]
+size = [0.2, 0.2]
+color = "#ffffff"
+opacity = 1.0
+rotation = -3.0
+rotation_jitter = 0.0
+motion = "static"
+period = 30.0
+
+# =========================
+# Layer 2
+# =========================
+
+[[layers]]
+name = "panel_2"
+opacity = 1.0
+background = "#404040"
+effects = [
+    { kind = "grid", intensity= 1, period = 10, pulse = 0, offset = [150, 40], rotation = 2, spacing = 34},
+  { kind = "blur", intensity = 0.28, period = 10.0, pulse = 0.0 }
+]
+
+[[layers.shapes]]
+kind = "rectangle"
+composite = "cutout"
+count = 1
+center = [0.5, 0.5]
+size = [0.35, 0.35]
+color = "#ffffff"
+opacity = 1.0
+rotation = 2.0
+rotation_jitter = 0.0
+motion = "static"
+period = 30.0
+
+# =========================
+# Layer 3
+# =========================
+
+[[layers]]
+name = "panel_3"
+opacity = 1.0
+background = "#575757"
+effects = [
+    { kind = "grid", intensity= 1, period = 10, pulse = 0, offset = [70, 210], rotation = -1.5, spacing = 40},
+  { kind = "blur", intensity = 0.22, period = 10.0, pulse = 0.0 }
+]
+
+[[layers.shapes]]
+kind = "rectangle"
+composite = "cutout"
+count = 1
+center = [0.5, 0.5]
+size = [0.5, 0.5]
+color = "#ffffff"
+opacity = 1.0
+rotation = -1.5
+rotation_jitter = 0.0
+motion = "static"
+period = 30.0
+
+# =========================
+# Layer 4
+# =========================
+
+[[layers]]
+name = "panel_4"
+opacity = 1.0
+background = "#767676"
+effects = [
+    { kind = "grid", intensity= 1, period = 10, pulse = 0, offset = [240, 150], rotation = 1.2, spacing = 44},
+  { kind = "blur", intensity = 0.16, period = 10.0, pulse = 0.0 }
+]
+
+[[layers.shapes]]
+kind = "rectangle"
+composite = "cutout"
+count = 1
+center = [0.5, 0.5]
+size = [0.68, 0.68]
+color = "#ffffff"
+opacity = 1.0
+rotation = 1.2
+rotation_jitter = 0.0
+motion = "static"
+period = 30.0
+
+# =========================
+# Frontmost panel: largest + brightest
+# =========================
+
+[[layers]]
+name = "panel_5_front"
+opacity = 1.0
+background = "#a8a8a8"
+effects = [
+    { kind = "grid", intensity= 1, period = 10, pulse = 0, offset = [120, 80], rotation = -2, spacing=48},
+  { kind = "blur", intensity = 0.10, period = 10.0, pulse = 0.0 },
+  { kind = "glitch", intensity = 0.012, period = 18.0, pulse = 0.25 }
+]
+
+[[layers.shapes]]
+kind = "rectangle"
+composite = "cutout"
+count = 1
+center = [0.5, 0.5]
+size = [0.84, 0.84]
+color = "#ffffffff"
+opacity = 1.0
+rotation = -2.0
+rotation_jitter = 0.0
+motion = "static"
+period = 30.0
