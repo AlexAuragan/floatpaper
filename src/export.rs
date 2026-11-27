@@ -6,6 +6,8 @@ pub struct Options { pub width:u32, pub height:u32, pub fps:Option<u32>, pub dur
 pub fn run(scene_path:&Path, output:&Path, options:Options) -> Result<()> {
     let scene=Scene::load(scene_path)?;
     if scene.has_commands() { eprintln!("WARNING: MP4 cannot display real-time command text. Export uses configured defaults; no commands will execute."); }
+    if scene.audio.enabled || !scene.audio_responses().is_empty() { eprintln!("WARNING: MP4 export disables live audio modulation; rendering base parameters."); }
+    let audio=crate::audio::Frame::default();
     let fps=options.fps.unwrap_or(scene.fps);
     if !(1..=240).contains(&fps) { bail!("fps must be 1..=240"); }
     let duration=options.duration.or(scene.loop_seconds).context("Set --duration for a non-looping scene")?;
@@ -44,7 +46,7 @@ pub fn run(scene_path:&Path, output:&Path, options:Options) -> Result<()> {
         for frame in 0..frames {
             if !running.load(Ordering::SeqCst) { bail!("Export cancelled"); }
             let mut encoder=gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label:Some("export frame") });
-            renderer.render(&gpu,&mut encoder,&view,frame as f64/fps as f64);
+            renderer.render(&gpu,&mut encoder,&view,frame as f64/fps as f64,&audio);
             encoder.copy_texture_to_buffer(wgpu::ImageCopyTexture { texture:&texture,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All },wgpu::ImageCopyBuffer { buffer:&readback,layout:wgpu::ImageDataLayout { offset:0,bytes_per_row:Some(padded as u32),rows_per_image:Some(height) } },renderer::extent(width,height));
             gpu.queue.submit(Some(encoder.finish()));
             let slice=readback.slice(..);
