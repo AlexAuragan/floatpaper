@@ -153,6 +153,12 @@ When the last global effect is a single-pass built-in, Floatpaper renders it dir
 
 Set `FLOATPAPER_DISABLE_FINAL_FUSION=1` to compare with the original two-pass path. The profiler reports the combined pass as, for example, `crt_present`; compare it with the sum of the old CRT and present categories. The optimization removes one intermediate FP16 rounding step and a same-resolution texture sample, so small output rounding differences are possible in both live mode and export.
 
+## Layer compositing fusion
+
+The last single-pass built-in effect of a layer can blend directly into the scene (or static layer cache), eliminating its temporary result and separate compositing pass. The shader multiplies all four premultiplied RGBA channels by the layer's constant opacity, independently of effect strength. Static prefix caches remain unchanged and may feed the fused effect directly. Custom effects, two-pass blur and layers without effects retain the separate compositing pass.
+
+Set `FLOATPAPER_DISABLE_LAYER_FUSION=1` for an isolated comparison; final global effect fusion and both static caches remain enabled. Profiler categories such as `glitch_composite` replace the corresponding effect and composite passes. Removing the intermediate FP16 conversion and same-resolution sample can introduce small pixel differences.
+
 ## GPU profiling (live or preview)
 
 Run with the optional timestamp profiler enabled:
