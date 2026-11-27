@@ -324,16 +324,15 @@ impl GpuChoice {
     }
 }
 
-pub fn run(path:&Path,mode:Mode,allow_commands:bool,allow_audio:bool)->Result<()> {
+pub fn run(path:&Path,mode:Mode)->Result<()> {
     let path=path.canonicalize().context("Scene path does not exist")?;
     let base=path.parent().context("Missing scene directory")?;
     let mut scene=Scene::load(&path)?;
-    let mut commands=crate::text_commands::Commands::new(&scene,base,allow_commands)?;
+    let mut commands=crate::text_commands::Commands::new(&scene,base,crate::trust::allowed(&path,&scene))?;
     let mut audio=crate::audio::LiveAudio::new();
     let mut audio_frame=crate::audio::Frame::default();
     let mut audio_responses=scene.audio_responses();
     let mut audio_last=Instant::now();
-    if scene.audio.enabled && !allow_audio { eprintln!("Audio disabled; pass --allow-audio to capture playback audio"); }
     let connection=Connection::connect_to_env().context("Connect to Wayland (run inside Hyprland)")?;
     let display=connection.display();
     let mut queue=connection.new_event_queue::<Desktop>();
@@ -450,8 +449,7 @@ pub fn run(path:&Path,mode:Mode,allow_commands:bool,allow_audio:bool)->Result<()
                     audio_frame=crate::audio::Frame::default();
                     audio_responses=scene.audio_responses();
                     audio_last=Instant::now();
-                    if scene.audio.enabled && !allow_audio { eprintln!("Audio disabled; pass --allow-audio to capture playback audio"); }
-                    commands=crate::text_commands::Commands::new(&scene,base,allow_commands)?;
+                    commands=crate::text_commands::Commands::new(&scene,base,crate::trust::allowed(&path,&scene))?;
                     if benchmark.frozen() || state.clock.paused() {
                         for screen in state.surfaces.values_mut() {screen.last_frame=None;}
                     }
@@ -484,12 +482,12 @@ pub fn run(path:&Path,mode:Mode,allow_commands:bool,allow_audio:bool)->Result<()
         }
         let visible=state.surfaces.iter().any(|(id,s)| !s.closed && s.configured && state.outputs.get(id).and_then(|o|o.name.as_deref()).and_then(|n|state.hidden_outputs.get(n)).is_none());
         commands.set_active(!paused && visible && !benchmark.frozen());
-        let audio_active=allow_audio && scene.audio.enabled && !paused && visible && !benchmark.frozen();
+        let audio_active=scene.audio.enabled && !paused && visible && !benchmark.frozen();
         audio.set_active(audio_active,scene.audio.sensitivity);
         let audio_now=Instant::now();
         let audio_dt=audio_now.saturating_duration_since(audio_last).as_secs_f64().min(0.1);
         audio_last=audio_now;
-        if allow_audio && scene.audio.enabled {
+        if scene.audio.enabled {
             audio_frame.advance(audio.snapshot(),&audio_responses,audio_dt,audio_active);
         }
         let command_values=commands.snapshot();
