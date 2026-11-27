@@ -1,6 +1,7 @@
 mod scene;
 mod renderer;
 mod desktop;
+mod visibility;
 mod export;
 
 use anyhow::{bail, Context, Result};
