@@ -138,7 +138,7 @@ Effects run in order. `intensity` is effect-specific; `period` is the animation 
 | `grid` | 0..1 | Rotatable pixel-space grid |
 | `custom` | shader-defined | Load a WGSL effect body from a file |
 
-Effect arguments: all effects accept `intensity`, `period`, and `pulse`; period has no visible effect on static effects unless pulse is nonzero. `rotation` is used by blur, CRT, glitch and grid (blur is two-pass when omitted, one-pass when supplied). `spacing`, `offset`, and `color` are grid-specific; custom effects can use any shared uniform. Noise ignores rotation. Unsupported non-default arguments produce warnings.
+Effect arguments: all effects accept `intensity`, `period`, and `pulse`; period has no visible effect on static effects unless pulse is nonzero. `rotation` is used by blur, CRT, glitch and grid (blur is two-pass when omitted, one-pass when supplied). `spacing` sets the CRT scanline pitch in physical pixels (default 3; values below 1 are clamped to 1 in the shader), or grid spacing (default 48). `offset` and `color` are grid-specific; custom effects can use any shared uniform. Noise ignores rotation. Unsupported non-default arguments produce warnings.
 
 For an individual shape effect, give that shape its own layer. Effects process the entire layer texture, including transparency. This version has no keyframe editor or scripting runtime.
 
