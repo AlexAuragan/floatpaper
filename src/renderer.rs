@@ -1,7 +1,7 @@
 use crate::scene::{self, Effect, EffectKind, Instance, Scene};
 use anyhow::{anyhow, bail, Context, Result};
 use bytemuck::{Pod, Zeroable};
-use std::{borrow::Cow, fs, path::Path};
+use std::{borrow::Cow, fs, ops::Range, path::Path};
 use wgpu::util::DeviceExt;
 
 const INTERNAL: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -134,6 +134,80 @@ impl Target {
     }
 }
 
+// A single bounded cache per renderer: combine the most expensive contiguous
+// run of static layers over transparent black, then blend it in layer order.
+struct StaticLayerCache {
+    range: Range<usize>,
+    target: Target,
+    valid: bool,
+}
+
+fn layer_is_static(layer: &scene::Layer) -> bool {
+    layer.shapes.iter().all(|shape| {
+        matches!(shape.motion, scene::Motion::Static)
+            && shape.spin == 0.0
+            && shape.pulse == 0.0
+    }) && layer.effects.iter().all(|effect| {
+        effect.pulse == 0.0
+            && matches!(effect.kind, EffectKind::Grid | EffectKind::Blur | EffectKind::Crt)
+    })
+}
+
+fn static_run(scene: &Scene) -> Option<Range<usize>> {
+    let mut best = None;
+    let mut best_score = 0;
+    let mut start = 0;
+    let mut score = 0;
+    for (i, layer) in scene.layers.iter().enumerate() {
+        if !layer_is_static(layer) {
+            start = i + 1;
+            score = 0;
+            continue;
+        }
+        // Count geometry, compositing and full-screen effect passes.
+        score += 2 + layer.effects.iter().map(|effect| {
+            if effect.kind == EffectKind::Blur && effect.rotation.is_none() {
+                2
+            } else {
+                1
+            }
+        }).sum::<usize>();
+        // A single unfiltered layer is not worth a full-size cached texture.
+        if score > 2 && score > best_score {
+            best = Some(start..i + 1);
+            best_score = score;
+        }
+    }
+    best
+}
+
+impl StaticLayerCache {
+    fn new(
+        gpu: &Gpu,
+        scene: &Scene,
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        uniform: &wgpu::Buffer,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
+        // Opt-out for visual/performance comparisons; cap extra allocation at
+        // 64 MiB per output (RGBA16Float = 8 bytes per pixel).
+        if std::env::var_os("FLOATPAPER_DISABLE_CACHE").is_some()
+            || u64::from(width) * u64::from(height) * 8 > 64 * 1024 * 1024
+        {
+            return None;
+        }
+        let range = static_run(scene)?;
+        eprintln!("Static layer cache: {}..{} ({}x{})", range.start, range.end, width, height);
+        Some(Self {
+            range,
+            target: Target::new(gpu, layout, sampler, uniform, width, height),
+            valid: false,
+        })
+    }
+}
+
 struct EffectPipeline {
     config: Effect,
     passes: Vec<wgpu::RenderPipeline>,
@@ -155,6 +229,7 @@ pub struct Renderer {
     uniform: wgpu::Buffer,
     stride: usize,
     targets: [Target; 4], // 0,1 layer ping-pong; 2,3 scene ping-pong
+    static_cache: Option<StaticLayerCache>,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     geometry_uniform: wgpu::Buffer,
@@ -325,6 +400,7 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
+            let static_cache = StaticLayerCache::new(gpu, &scene, &layout, &sampler, &uniform, width, height);
             Ok(Self {
                 scene,
                 width,
@@ -338,6 +414,7 @@ impl Renderer {
                 uniform,
                 stride,
                 targets,
+                static_cache,
                 layout,
                 sampler,
                 geometry_uniform,
@@ -370,6 +447,9 @@ impl Renderer {
                 height,
             )
         });
+        self.static_cache = StaticLayerCache::new(
+            gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height,
+        );
         gpu.queue.write_buffer(
             &self.geometry_uniform,
             0,
@@ -427,46 +507,78 @@ impl Renderer {
         };
         clear(passes.encoder, &self.targets[2].view, self.background);
         for (i, layer) in self.layers.iter().enumerate() {
-            {
-                let mut pass = begin(
-                    passes.encoder,
-                    &self.targets[0].view,
-                    wgpu::LoadOp::Clear(layer.clear),
-                );
-                let (over, cutout) = &ranges[i];
-                if !over.is_empty() {
-                    pass.set_pipeline(&self.geometry);
-                    pass.set_bind_group(0, &self.geo_bind, &[]);
-                    pass.set_vertex_buffer(0, self.instances.slice(..));
-                    pass.draw(0..6, over.clone());
+            let cached = self.static_cache.as_ref().filter(|cache| cache.range.contains(&i));
+            if cached.map_or(true, |cache| !cache.valid) {
+                let destination = match cached {
+                    Some(cache) => {
+                        if i == cache.range.start {
+                            clear(passes.encoder, &cache.target.view, wgpu::Color::TRANSPARENT);
+                        }
+                        &cache.target.view
+                    }
+                    None => &self.targets[2].view,
+                };
+                {
+                    let mut pass = begin(
+                        passes.encoder,
+                        &self.targets[0].view,
+                        wgpu::LoadOp::Clear(layer.clear),
+                    );
+                    let (over, cutout) = &ranges[i];
+                    if !over.is_empty() {
+                        pass.set_pipeline(&self.geometry);
+                        pass.set_bind_group(0, &self.geo_bind, &[]);
+                        pass.set_vertex_buffer(0, self.instances.slice(..));
+                        pass.draw(0..6, over.clone());
+                    }
+                    if !cutout.is_empty() {
+                        pass.set_pipeline(&self.geometry_cutout);
+                        pass.set_bind_group(0, &self.geo_bind, &[]);
+                        pass.set_vertex_buffer(0, self.instances.slice(..));
+                        pass.draw(0..6, cutout.clone());
+                    }
                 }
-                if !cutout.is_empty() {
-                    pass.set_pipeline(&self.geometry_cutout);
-                    pass.set_bind_group(0, &self.geo_bind, &[]);
-                    pass.set_vertex_buffer(0, self.instances.slice(..));
-                    pass.draw(0..6, cutout.clone());
+                let current = passes.chain(
+                    &self.targets,
+                    0,
+                    1,
+                    &layer.effects,
+                    t,
+                    self.scene.loop_seconds,
+                );
+                passes.draw(
+                    &self.composite,
+                    &self.targets[current],
+                    destination,
+                    wgpu::LoadOp::Load,
+                    self.scene.layers[i].opacity,
+                    0.0,
+                    [0.0; 2],
+                    0.0,
+                    48.0,
+                    [0.0, 0.0, 0.0, 1.0],
+                );
+            }
+            // Blend the whole cached run exactly once at its original position.
+            if let Some(cache) = cached {
+                if i + 1 == cache.range.end {
+                    passes.draw(
+                        &self.composite,
+                        &cache.target,
+                        &self.targets[2].view,
+                        wgpu::LoadOp::Load,
+                        1.0,
+                        0.0,
+                        [0.0; 2],
+                        0.0,
+                        48.0,
+                        [0.0, 0.0, 0.0, 1.0],
+                    );
                 }
             }
-            let current = passes.chain(
-                &self.targets,
-                0,
-                1,
-                &layer.effects,
-                t,
-                self.scene.loop_seconds,
-            );
-            passes.draw(
-                &self.composite,
-                &self.targets[current],
-                &self.targets[2].view,
-                wgpu::LoadOp::Load,
-                self.scene.layers[i].opacity,
-                0.0,
-                [0.0; 2],
-                0.0,
-                48.0,
-                [0.0, 0.0, 0.0, 1.0],
-            );
+        }
+        if let Some(cache) = &mut self.static_cache {
+            cache.valid = true;
         }
         let current = passes.chain(
             &self.targets,
@@ -744,4 +856,64 @@ pub fn check_size(gpu: &Gpu, width: u32, height: u32) -> Result<()> {
         bail!("Invalid dimensions {width}x{height}; GPU limit {max}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod static_cache_tests {
+    use super::*;
+
+    fn sample_scene() -> Scene {
+        toml::from_str(r##"
+[[layers]]
+name = "moving"
+[[layers.shapes]]
+kind = "triangle"
+motion = "drift"
+
+[[layers]]
+name = "static_grid"
+effects = [{kind = "grid"}]
+[[layers.shapes]]
+kind = "rectangle"
+composite = "cutout"
+
+[[layers]]
+name = "static_blur"
+effects = [{kind = "blur"}]
+
+[[layers]]
+name = "animated_glitch"
+effects = [{kind = "glitch", pulse = 0.0}]
+
+[[layers]]
+name = "static_crt"
+effects = [{kind = "crt"}]
+"##).unwrap()
+    }
+
+    #[test]
+    fn caches_best_contiguous_run_without_crossing_dynamic_layers() {
+        assert_eq!(static_run(&sample_scene()), Some(1..3));
+    }
+
+    #[test]
+    fn static_classification_is_conservative() {
+        let mut s = sample_scene();
+        assert!(!layer_is_static(&s.layers[0]));
+        assert!(layer_is_static(&s.layers[1]));
+        assert!(!layer_is_static(&s.layers[3]));
+        assert!(layer_is_static(&s.layers[4]));
+        s.layers[1].shapes[0].spin = 0.1;
+        assert!(!layer_is_static(&s.layers[1]));
+        s.layers[1].shapes[0].spin = 0.0;
+        s.layers[1].shapes[0].pulse = 0.1;
+        assert!(!layer_is_static(&s.layers[1]));
+        s.layers[2].effects[0].pulse = 0.1;
+        assert!(!layer_is_static(&s.layers[2]));
+        s.layers[4].effects[0].kind = EffectKind::Custom;
+        assert!(!layer_is_static(&s.layers[4]));
+        s.layers[4].effects[0].kind = EffectKind::Noise;
+        assert!(!layer_is_static(&s.layers[4]));
+        assert_eq!(static_run(&s), None);
+    }
 }
