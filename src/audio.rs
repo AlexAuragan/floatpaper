@@ -371,8 +371,8 @@ impl LiveAudio {
     }
     pub fn set_active(&mut self, active: bool, sensitivity: f32) {
         if !active {
-            self.running.store(false, Ordering::Release);
             if let Some(worker) = self.worker.take() {
+                self.running.store(false, Ordering::Release);
                 if worker.join().is_err() { eprintln!("Audio worker panicked"); }
                 *self.values.lock().expect("audio mutex poisoned") = Signals::default();
             }
