@@ -1,7 +1,7 @@
 use crate::scene::{self, Effect, EffectKind, Instance, Scene};
 use anyhow::{anyhow, bail, Context, Result};
 use bytemuck::{Pod, Zeroable};
-use std::{borrow::Cow, fs, ops::Range, path::Path};
+use std::{borrow::Cow, collections::BTreeMap, fs, ops::Range, path::Path, sync::mpsc, time::Instant};
 use wgpu::util::DeviceExt;
 
 const INTERNAL: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -44,10 +44,18 @@ impl Gpu {
             adapter.get_info().device_type
         );
         let limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+        let required_features = if std::env::var_os("FLOATPAPER_PROFILE").is_some() {
+            if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+                bail!("GPU profiling requested, but the selected adapter lacks TIMESTAMP_QUERY");
+            }
+            wgpu::Features::TIMESTAMP_QUERY
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("floatpaper"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 required_limits: limits,
             },
             None,
@@ -208,6 +216,171 @@ impl StaticLayerCache {
     }
 }
 
+// Profile one in 15 submitted frames. Readback is asynchronous and never waits
+// for the GPU; if the previous sample is still pending, skip the next sample.
+const PROFILE_PASSES: usize = 512;
+const PROFILE_INTERVAL: u64 = 15;
+struct FrameProfiler {
+    label: String,
+    query: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    pending: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    labels: Vec<&'static str>,
+    recording: bool,
+    truncated: bool,
+    failed: bool,
+    submitted: u64,
+    window_frames: u64,
+    window_start: Instant,
+    samples: Vec<f64>,
+    categories: BTreeMap<&'static str, f64>,
+}
+
+impl FrameProfiler {
+    fn new(gpu: &Gpu, label: String) -> Self {
+        let size = (PROFILE_PASSES * 16) as u64;
+        let query = gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("Floatpaper pass timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: (PROFILE_PASSES * 2) as u32,
+        });
+        let resolve = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Floatpaper timestamp resolve"),
+            size,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Floatpaper timestamp readback"),
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Self {
+            label, query, resolve, readback, pending: None, labels: Vec::new(),
+            recording: false, truncated: false, failed: false, submitted: 0,
+            window_frames: 0, window_start: Instant::now(), samples: Vec::new(),
+            categories: BTreeMap::new(),
+        }
+    }
+
+    fn prepare(&mut self, gpu: &Gpu) {
+        if let Some(receiver) = self.pending.as_ref() {
+            gpu.device.poll(wgpu::Maintain::Poll);
+            match receiver.try_recv() {
+                Ok(Ok(())) => {
+                    let count = self.labels.len();
+                    let mapped = self.readback.slice(..(count * 16) as u64).get_mapped_range();
+                    let period = f64::from(gpu.queue.get_timestamp_period()) / 1_000_000.0;
+                    let mut total = 0.0;
+                    for (label, pair) in self.labels.iter().zip(mapped.chunks_exact(16)) {
+                        let start = u64::from_ne_bytes(pair[..8].try_into().expect("timestamp start"));
+                        let end = u64::from_ne_bytes(pair[8..].try_into().expect("timestamp end"));
+                        let ms = end.wrapping_sub(start) as f64 * period;
+                        total += ms;
+                        *self.categories.entry(*label).or_default() += ms;
+                    }
+                    drop(mapped);
+                    self.readback.unmap();
+                    self.samples.push(total);
+                    self.pending = None;
+                }
+                Ok(Err(e)) => {
+                    eprintln!("GPU profiler {}: readback failed: {e}", self.label);
+                    self.pending = None;
+                    self.failed = true;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    eprintln!("GPU profiler {}: readback callback disconnected", self.label);
+                    self.pending = None;
+                    self.failed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        self.recording = !self.failed && self.pending.is_none()
+            && (self.submitted + 1) % PROFILE_INTERVAL == 0;
+        if self.recording {
+            self.labels.clear();
+            self.truncated = false;
+        }
+    }
+
+    fn timestamps(&mut self, label: &'static str) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        if !self.recording {
+            return None;
+        }
+        if self.labels.len() == PROFILE_PASSES {
+            self.truncated = true;
+            return None;
+        }
+        let index = (self.labels.len() * 2) as u32;
+        self.labels.push(label);
+        Some(wgpu::RenderPassTimestampWrites {
+            query_set: &self.query,
+            beginning_of_pass_write_index: Some(index),
+            end_of_pass_write_index: Some(index + 1),
+        })
+    }
+
+    fn finish(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.recording {
+            return;
+        }
+        if self.truncated || self.labels.is_empty() {
+            eprintln!("GPU profiler {}: sample discarded (pass count outside supported range)", self.label);
+            self.recording = false;
+            return;
+        }
+        let count = (self.labels.len() * 2) as u32;
+        encoder.resolve_query_set(&self.query, 0..count, &self.resolve, 0);
+        encoder.copy_buffer_to_buffer(&self.resolve, 0, &self.readback, 0, u64::from(count) * 8);
+    }
+
+    // Called only after the command buffer has been submitted.
+    fn submitted(&mut self, width: u32, height: u32) {
+        self.submitted += 1;
+        self.window_frames += 1;
+        if self.recording {
+            let (tx, rx) = mpsc::channel();
+            self.readback.slice(..(self.labels.len() * 16) as u64)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    // The renderer may have been dropped during a scene reload.
+                    let _ = tx.send(result);
+                });
+            self.pending = Some(rx);
+            self.recording = false;
+        }
+        let elapsed = self.window_start.elapsed().as_secs_f64();
+        if elapsed < 5.0 {
+            return;
+        }
+        let fps = self.window_frames as f64 / elapsed;
+        let n = self.samples.len();
+        if n > 0 {
+            let mean = self.samples.iter().sum::<f64>() / n as f64;
+            self.samples.sort_by(f64::total_cmp);
+            let p95 = self.samples[((n as f64 * 0.95).ceil() as usize).saturating_sub(1)];
+            let mut categories: Vec<_> = self.categories.iter().collect();
+            categories.sort_by(|a, b| b.1.total_cmp(a.1));
+            let detail = categories.iter().map(|(label, sum)| {
+                format!("{label}={:.3}", **sum / n as f64)
+            }).collect::<Vec<_>>().join(" ");
+            eprintln!(
+                "PROFILE {} {}x{} submit_fps={fps:.2} samples={n} gpu_pass_sum_ms={mean:.3} p95_ms={p95:.3} | {detail}",
+                self.label, width, height,
+            );
+        } else {
+            eprintln!("PROFILE {} {}x{} submit_fps={fps:.2} samples=0 (no completed GPU samples)", self.label, width, height);
+        }
+        self.window_start = Instant::now();
+        self.window_frames = 0;
+        self.samples.clear();
+        self.categories.clear();
+    }
+}
+
 struct EffectPipeline {
     config: Effect,
     passes: Vec<wgpu::RenderPipeline>,
@@ -239,6 +412,7 @@ pub struct Renderer {
     global: Vec<EffectPipeline>,
     background: wgpu::Color,
     uniform_bytes: Vec<u8>,
+    profiler: Option<FrameProfiler>,
 }
 
 impl Renderer {
@@ -424,6 +598,7 @@ impl Renderer {
                 global,
                 background,
                 uniform_bytes: Vec::with_capacity(stride * MAX_PASSES),
+                profiler: None,
             })
         })();
         let validation = pollster::block_on(d.pop_error_scope());
@@ -459,6 +634,18 @@ impl Renderer {
         self.height = height;
         Ok(())
     }
+    pub fn enable_profile(&mut self, gpu: &Gpu, label: String) {
+        if gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            self.profiler = Some(FrameProfiler::new(gpu, label));
+        }
+    }
+
+    pub fn profile_submitted(&mut self) {
+        if let Some(profiler) = &mut self.profiler {
+            profiler.submitted(self.width, self.height);
+        }
+    }
+
     pub fn render(
         &mut self,
         gpu: &Gpu,
@@ -466,6 +653,9 @@ impl Renderer {
         output: &wgpu::TextureView,
         t: f64,
     ) {
+        if let Some(profiler) = &mut self.profiler {
+            profiler.prepare(gpu);
+        }
         let t = self.scene.time(t);
         let layer_instances = self.scene.instances(t);
         // Pack both instance groups into one buffer, recording each layer's draw ranges.
@@ -504,25 +694,26 @@ impl Renderer {
             bytes: &mut self.uniform_bytes,
             stride: self.stride,
             common,
+            profiler: self.profiler.as_mut().filter(|p| p.recording),
         };
-        clear(passes.encoder, &self.targets[2].view, self.background);
+        passes.clear(&self.targets[2].view, self.background, "scene_clear");
         for (i, layer) in self.layers.iter().enumerate() {
             let cached = self.static_cache.as_ref().filter(|cache| cache.range.contains(&i));
             if cached.map_or(true, |cache| !cache.valid) {
                 let destination = match cached {
                     Some(cache) => {
                         if i == cache.range.start {
-                            clear(passes.encoder, &cache.target.view, wgpu::Color::TRANSPARENT);
+                            passes.clear(&cache.target.view, wgpu::Color::TRANSPARENT, "cache_clear");
                         }
                         &cache.target.view
                     }
                     None => &self.targets[2].view,
                 };
                 {
-                    let mut pass = begin(
-                        passes.encoder,
+                    let mut pass = passes.begin(
                         &self.targets[0].view,
                         wgpu::LoadOp::Clear(layer.clear),
+                        "geometry",
                     );
                     let (over, cutout) = &ranges[i];
                     if !over.is_empty() {
@@ -547,6 +738,7 @@ impl Renderer {
                     self.scene.loop_seconds,
                 );
                 passes.draw(
+                    "composite",
                     &self.composite,
                     &self.targets[current],
                     destination,
@@ -563,6 +755,7 @@ impl Renderer {
             if let Some(cache) = cached {
                 if i + 1 == cache.range.end {
                     passes.draw(
+                        "cached_composite",
                         &self.composite,
                         &cache.target,
                         &self.targets[2].view,
@@ -589,6 +782,7 @@ impl Renderer {
             self.scene.loop_seconds,
         );
         passes.draw(
+            "present",
             &self.present,
             &self.targets[current],
             output,
@@ -604,6 +798,9 @@ impl Renderer {
             48.0,
             [0.0, 0.0, 0.0, 1.0],
         );
+        if let Some(profiler) = passes.profiler.as_deref_mut() {
+            profiler.finish(passes.encoder);
+        }
         gpu.queue
             .write_buffer(&self.uniform, 0, &self.uniform_bytes);
     }
@@ -613,11 +810,36 @@ struct Passes<'a> {
     bytes: &'a mut Vec<u8>,
     stride: usize,
     common: Uniform,
+    profiler: Option<&'a mut FrameProfiler>,
 }
 
 impl Passes<'_> {
+    fn begin<'b>(
+        &'b mut self,
+        view: &'b wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+        label: &'static str,
+    ) -> wgpu::RenderPass<'b> {
+        let timestamp_writes = self.profiler.as_deref_mut().and_then(|p| p.timestamps(label));
+        self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+            })],
+            timestamp_writes,
+            occlusion_query_set: None,
+        })
+    }
+
+    fn clear(&mut self, view: &wgpu::TextureView, color: wgpu::Color, label: &'static str) {
+        drop(self.begin(view, wgpu::LoadOp::Clear(color), label));
+    }
+
     fn draw(
         &mut self,
+        label: &'static str,
         pipeline: &wgpu::RenderPipeline,
         input: &Target,
         output: &wgpu::TextureView,
@@ -648,7 +870,7 @@ impl Passes<'_> {
         self.bytes[offset..offset + std::mem::size_of::<Uniform>()]
             .copy_from_slice(bytemuck::bytes_of(&u));
 
-        let mut pass = begin(self.encoder, output, load);
+        let mut pass = self.begin(output, load, label);
 
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &input.bind, &[offset as u32]);
@@ -688,6 +910,7 @@ impl Passes<'_> {
                     let next = if current == a { b } else { a };
 
                     self.draw(
+                        effect_label(effect.config.kind),
                         pipeline,
                         &targets[current],
                         &targets[next].view,
@@ -709,29 +932,17 @@ impl Passes<'_> {
     }
 }
 
-fn begin<'a>(
-    encoder: &'a mut wgpu::CommandEncoder,
-    view: &'a wgpu::TextureView,
-    load: wgpu::LoadOp<wgpu::Color>,
-) -> wgpu::RenderPass<'a> {
-    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("floatpaper pass"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load,
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-    })
+fn effect_label(kind: EffectKind) -> &'static str {
+    match kind {
+        EffectKind::Noise => "noise",
+        EffectKind::Crt => "crt",
+        EffectKind::Glitch => "glitch",
+        EffectKind::Blur => "blur",
+        EffectKind::Grid => "grid",
+        EffectKind::Custom => "custom",
+    }
 }
-fn clear(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, color: wgpu::Color) {
-    drop(begin(encoder, view, wgpu::LoadOp::Clear(color)));
-}
+
 fn clear_color(s: &str) -> Result<wgpu::Color> {
     let c = scene::parse_color(s)?;
     Ok(wgpu::Color {
