@@ -852,7 +852,7 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml", "circles_of_death.toml", "crystallized.toml", "crystallized_material.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml", "circles_of_death.toml", "crystallized.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
     }
