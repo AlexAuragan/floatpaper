@@ -41,21 +41,22 @@ Edit the scene while running to hot-reload it. Use `floatpaper pause`, `resume`,
 For the live telemetry example:
 
 ```sh
-floatpaper live scenes/spaceship_telemetry.toml --allow-commands
+floatpaper trust scenes/spaceship_telemetry.toml
+floatpaper live scenes/spaceship_telemetry.toml
 ```
 
-**Only enable commands for trusted scenes.** Commands run with your user permissions, including after hot reload. Without the flag, text sources use their defaults.
+**Only trust scenes and scripts you have reviewed.** Commands run with your user permissions. Trust is stored per canonical scene path and exact command names/arguments; changed declarations require reauthorization. Scripts and programs invoked by an approved command are not pinned or sandboxed. Use `floatpaper untrust <scene>` to revoke approval, then restart or reload the running scene. Without trust, command text uses defaults.
 
 ## Audio reactivity (optional)
 
 Install `libpulse` for `parec` and use a running PulseAudio-compatible server (such as PipeWire with pipewire-pulse).
 
 ```sh
-floatpaper preview scenes/audio_reactive.toml --allow-audio
-floatpaper live scenes/audio_reactive.toml --allow-audio
+floatpaper preview scenes/audio_reactive.toml
+floatpaper live scenes/audio_reactive.toml
 ```
 
-Playback audio is captured only when explicitly allowed and the scene enables audio. It is processed locally, not recorded to disk. Audio-reactive properties and spectrum bars are described in the reference.
+Playback audio is captured when the scene sets `[audio] enabled = true`. It is processed locally, not recorded to disk. Audio-reactive properties and spectrum bars are described in the reference.
 
 ## Video export (optional)
 
