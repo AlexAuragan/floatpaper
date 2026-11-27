@@ -300,6 +300,9 @@ fn raster_size_default() -> u32 { 1024 }
 #[serde(deny_unknown_fields)]
 pub struct Effect {
     pub kind: EffectKind,
+    /// Author guarantees the custom shader is independent of time and audio.
+    #[serde(default, rename = "static")]
+    pub static_shader: bool,
     #[serde(default = "default_true")]
     pub continuous: bool,
     #[serde(default)]
@@ -779,6 +782,10 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
         if let Some(a) = &e.audio { a.response().validate()?; if !(-100.0..=100.0).contains(&a.intensity) { bail!("Audio effect intensity must be -100..=100"); } }
         positive(e.period, "effect.period")?;
         unit(e.pulse, "effect.pulse")?;
+        if e.static_shader {
+            if e.kind != EffectKind::Custom { bail!("static is only valid for custom effects"); }
+            if e.pulse != 0.0 || e.audio.is_some() { bail!("Static custom effects cannot use pulse or audio modulation"); }
+        }
         match (&e.kind, &e.shader) {
             (EffectKind::Custom, Some(p)) => {
                 fs::read_to_string(base.join(p))
@@ -838,6 +845,26 @@ pub fn parse_color(s: &str) -> Result<[f32; 4]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn static_custom_effect_validation() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes");
+        let valid: Effect = toml::from_str(r#"
+kind = "custom"
+shader = "../shaders/material_stone.wgsl"
+static = true
+"#).unwrap();
+        assert!(valid.static_shader);
+        assert!(validate_effects(&[valid.clone()], &base).is_ok());
+        let mut invalid = valid.clone();
+        invalid.pulse = 0.1;
+        assert!(validate_effects(&[invalid], &base).is_err());
+        let mut invalid = valid;
+        invalid.kind = EffectKind::Grid;
+        invalid.shader = None;
+        assert!(validate_effects(&[invalid], &base).is_err());
+        let ordinary: Effect = toml::from_str("kind = \"custom\"").unwrap();
+        assert!(!ordinary.static_shader);
+    }
     #[test]
     fn colors_are_linear() {
         assert!((parse_color("#80808080").unwrap()[0] - 0.21586).abs() < 0.0001);
