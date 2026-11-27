@@ -879,7 +879,7 @@ static = true
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml", "circles_of_death.toml", "crystallized.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml", "circles_of_death.toml", "crystallized.toml", "circles_of_death_snow_1.toml", "shader_lab_glitch_1.toml", "shader_lab_glitch_2.toml", "shader_lab_snow_1.toml", "shader_lab_fog_1.toml", "shader_lab_film_grain_1.toml", "shader_lab_chromatic_aberration_1.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
     }
