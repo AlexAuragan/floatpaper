@@ -324,10 +324,11 @@ impl GpuChoice {
     }
 }
 
-pub fn run(path:&Path,mode:Mode)->Result<()> {
+pub fn run(path:&Path,mode:Mode,allow_commands:bool)->Result<()> {
     let path=path.canonicalize().context("Scene path does not exist")?;
     let base=path.parent().context("Missing scene directory")?;
     let mut scene=Scene::load(&path)?;
+    let mut commands=crate::text_commands::Commands::new(&scene,base,allow_commands)?;
     let connection=Connection::connect_to_env().context("Connect to Wayland (run inside Hyprland)")?;
     let display=connection.display();
     let mut queue=connection.new_event_queue::<Desktop>();
@@ -420,6 +421,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
     state.clock=Clock::new(Instant::now());
     let mut reload_at=None;
     let mut last_watch_error=None;
+    let mut text_paused=false;
     while running.load(Ordering::SeqCst) && !state.quit {
         if let Mode::Live{output}=&mode {
             for id in std::mem::take(&mut state.removed) { state.surfaces.remove(&id); }
@@ -439,7 +441,8 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             match reload(&gpu,&mut pool,&path) {
                 Ok(new_scene)=>{
                     scene=new_scene;
-                    if benchmark.frozen() {
+                    commands=crate::text_commands::Commands::new(&scene,base,allow_commands)?;
+                    if benchmark.frozen() || state.clock.paused() {
                         for screen in state.surfaces.values_mut() {screen.last_frame=None;}
                     }
                     eprintln!("Reloaded {}",path.display());
@@ -462,6 +465,16 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             }
         }
         reconcile_renderers(&gpu,&state,&mut pool,&scene,base,share,benchmark)?;
+        let paused=state.clock.paused();
+        if paused != text_paused {
+            text_paused=paused;
+            // Present one fallback frame on each visible output, then freeze.
+            for screen in state.surfaces.values_mut() { screen.last_frame=None; }
+            for group in pool.values_mut() { if let Some(shared)=&mut group.shared { shared.rendered_at=None; } }
+        }
+        let visible=state.surfaces.iter().any(|(id,s)| !s.closed && s.configured && state.outputs.get(id).and_then(|o|o.name.as_deref()).and_then(|n|state.hidden_outputs.get(n)).is_none());
+        commands.set_active(!paused && visible && !benchmark.frozen());
+        let command_values=commands.snapshot();
         for (&id,screen) in &mut state.surfaces {
             if screen.closed || !screen.configured { continue; }
             let name=state.outputs.get(&id).and_then(|o|o.name.as_deref());
@@ -487,7 +500,8 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
                 if !remaining.is_zero() { timeout=timeout.min(remaining); continue; }
             }
             let frame_time=if benchmark.frozen() {0.0} else {state.clock.elapsed(now).as_secs_f64()};
-            match draw(&gpu,screen,group,&qh,frame_time,now,interval,benchmark)? {
+            group.renderer.set_text_paused(paused);
+            match draw(&gpu,screen,group,&qh,frame_time,now,interval,benchmark,&command_values)? {
                 Some(rendered)=>{
                     screen.last_frame=Some(now);
                     if benchmark.active() {stats.record(id,rendered);}
@@ -560,7 +574,7 @@ fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mu
     }
     Ok(())
 }
-fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Desktop>,t:f64,now:Instant,interval:Duration,benchmark:BenchmarkMode)->Result<Option<bool>> {
+fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Desktop>,t:f64,now:Instant,interval:Duration,benchmark:BenchmarkMode,command_values:&crate::text_commands::Values)->Result<Option<bool>> {
     let r=screen.render.as_mut().context("Surface not configured")?;
     let frame=match r.surface.get_current_texture() {
         Ok(f)=>f,
@@ -574,6 +588,7 @@ fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Deskt
         // one requested frame interval. Never wait for another output.
         let refresh=benchmark.needs_render(shared.rendered_at,now,interval);
         if refresh {
+            group.renderer.update_command_text(gpu,command_values);
             group.renderer.render(gpu,&mut encoder,&shared.view,t);
             shared.rendered_at=Some(now);
         }
@@ -581,6 +596,7 @@ fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Deskt
         refresh
     } else {
         let view=frame.texture.create_view(&Default::default());
+        group.renderer.update_command_text(gpu,command_values);
         group.renderer.render(gpu,&mut encoder,&view,t);
         true
     };
