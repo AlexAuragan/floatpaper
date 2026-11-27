@@ -1,5 +1,7 @@
 # Original monochrome scene, inspired by the Pure Black visual aesthetic.
 fps = 30
+# Preserve the 16:9 composition's relative shape area on other displays.
+size_reference_aspect = 1.7777778
 loop_seconds = 1200.0
 seed = 4726
 background = "#07080b"
