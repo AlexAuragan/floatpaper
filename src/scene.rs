@@ -300,6 +300,8 @@ pub struct Effect {
     pub kind: EffectKind,
     #[serde(default = "default_true")]
     pub continuous: bool,
+    #[serde(default)]
+    pub glitch_style: GlitchStyle,
     #[serde(default = "intensity_default")]
     pub intensity: f32,
     #[serde(default = "period_default")]
@@ -328,6 +330,14 @@ pub enum EffectKind {
     Blur,
     Grid,
     Custom,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GlitchStyle {
+    #[default]
+    Legacy,
+    Fine,
 }
 
 #[repr(C)]
@@ -784,6 +794,7 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
             bail!("Effect spacing must be > 0");
         }
 
+        if e.glitch_style != GlitchStyle::Legacy && e.kind != EffectKind::Glitch { bail!("glitch_style is only valid for glitch effects"); }
         parse_color(&e.color)?;
         // Keep existing scenes compatible, but surface parameters that have no effect.
         if e.kind != EffectKind::Custom {
@@ -899,6 +910,9 @@ logarithmic = false
     fn glitch_and_audio_defaults_are_opt_out() {
         let effect: Effect = toml::from_str("kind = \"glitch\"").unwrap();
         assert!(effect.continuous);
+        assert_eq!(effect.glitch_style, GlitchStyle::Legacy);
+        let fine: Effect = toml::from_str("kind = \"glitch\"\nglitch_style = \"fine\"").unwrap();
+        assert_eq!(fine.glitch_style, GlitchStyle::Fine);
         let effect: Effect = toml::from_str("kind = \"glitch\"\ncontinuous = false").unwrap();
         assert!(!effect.continuous);
         let shape: ShapeAudio = toml::from_str("signal = \"bass\"").unwrap();
