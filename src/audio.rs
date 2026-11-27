@@ -212,6 +212,73 @@ fn capture(target: Option<&str>, sensitivity: f32, running: &AtomicBool, output:
     Ok(())
 }
 
+// Each distinct signal/envelope pair is evaluated once per desktop tick.
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Signal {
+    #[default] Onset,
+    Kick, Bass, Mid, Treble, Volume, OnsetStrength, KickStrength,
+}
+impl Signal {
+    pub fn read(self, s: Signals) -> f32 {
+        match self {
+            Self::Onset => s.onset, Self::Kick => s.kick, Self::Bass => s.bass,
+            Self::Mid => s.mid, Self::Treble => s.treble, Self::Volume => s.volume,
+            Self::OnsetStrength => s.onset*s.onset_strength,
+            Self::KickStrength => s.kick*s.kick_strength,
+        }
+    }
+}
+fn default_attack() -> f32 { 0.01 }
+fn default_decay() -> f32 { 0.15 }
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+pub struct Response {
+    #[serde(default)] pub signal: Signal,
+    #[serde(default = "default_attack")] pub attack: f32,
+    #[serde(default = "default_decay")] pub decay: f32,
+}
+impl Response {
+    pub fn validate(self) -> Result<()> {
+        if !(0.0..=5.0).contains(&self.attack) || !(0.0..=10.0).contains(&self.decay) {
+            bail!("Audio attack must be 0..=5s and decay 0..=10s");
+        }
+        Ok(())
+    }
+    fn key(self) -> (Signal,u32,u32) { (self.signal,self.attack.to_bits(),self.decay.to_bits()) }
+}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Modulation { pub value: f32, pub integral: f64 }
+#[derive(Default)]
+pub struct Frame {
+    pub signals: Signals,
+    values: std::collections::BTreeMap<(Signal,u32,u32), Modulation>,
+}
+impl Frame {
+    pub fn get(&self, response: Response) -> Modulation {
+        self.values.get(&response.key()).copied().unwrap_or_default()
+    }
+    pub fn advance(&mut self, signals: Signals, responses: &[Response], dt: f64, active: bool) {
+        self.signals = if active { signals } else { Signals::default() };
+        for response in responses {
+            let state = self.values.entry(response.key()).or_default();
+            if !active { state.value = 0.; continue; }
+            let target = response.signal.read(signals);
+            let tau = if target > state.value { response.attack } else { response.decay } as f64;
+            let old = state.value as f64;
+            let target = target as f64;
+            // Exact integral of an exponentially smoothed constant input.
+            // Rotation speed can change without resetting orientation at beats.
+            if tau == 0. {
+                state.value = target as f32;
+                state.integral += target*dt;
+            } else {
+                let a = -(-dt/tau).exp_m1();
+                state.value = (old+(target-old)*a) as f32;
+                state.integral += target*dt + (old-target)*tau*a;
+            }
+        }
+    }
+}
 // Live capture owns one worker per desktop, not per renderer/output.
 pub struct LiveAudio {
     running: Arc<AtomicBool>,
