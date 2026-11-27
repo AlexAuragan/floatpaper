@@ -215,6 +215,8 @@ Audio-driven motion and rotation retain accumulated phase after silence, avoidin
 
 Glitch defaults to `continuous = true`: displacement amplitude follows intensity without the built-in burst gate. Period controls smooth pattern variation. Set `continuous = false` for the original periodic bursts. This changes the appearance of older glitch scenes that omit the flag.
 
+Set `glitch_style = "fine"` on a glitch effect for sparse scanline distortion: 216 thin bands, occasional four-line tears, maximum displacement 1.5% of viewport width and RGB split up to 0.2%. `glitch_style = "legacy"` (default) preserves the original 32-band shader. Both styles retain rotation, period, pulse, continuous mode and audio intensity modulation. Both use three texture samples and one effect pass; fine style uses a smaller conservative sparse scissor bound.
+
 ### Spectrum
 
 ```toml
