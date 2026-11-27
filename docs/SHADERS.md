@@ -8,14 +8,14 @@ These original WGSL effects use Floatpaper's existing custom-effect interface. E
 | glitch_2 | Sparse rectangular displacement and color corruption | 0.8 | macroblock height, 24 px | 1 |
 | snow_1 | Wind-driven, independently advancing columns of soft, elongated flakes | 0.65 | density scale, 48 (larger = fewer flakes) | 1 |
 | fog_1 | Domain-warped, drifting fog | 0.35 | cloud scale, 260 px | 1 |
-| film_grain_1 | Monochrome, luminance-dependent animated grain | 0.65 | grain size, 1 px | 1 |
+| film_grain_1 | Fine integer-hashed, luminance-dependent animated grain | 0.65 | grain size, 1 px | 1 |
 | chromatic_aberration_1 | Radial lens dispersion | 0.8 | unused | 3 |
 
 All support the intensity uniform and a seamless phase cycle (except the time-independent lens effect). Period controls cycle duration, not a universal physical speed. Snow rotation controls the wind shear, fog rotation controls the cloud orientation, and fog/snow use color as an overlay tint. Lens offset moves the optical center in pixels. The new effects are single-pass and do not require an engine change. They operate on linear premultiplied RGBA; snow and fog can add coverage to transparent input. Apply them globally for ordinary atmospheric overlays. The lens effect can declare `static = true` when used on static layers; all other new effects are time dependent. Glitch_2 is spatial corruption only, not actual datamoshing with previous-frame feedback.
 
 ## Examples
 
-Each `scenes/shader_lab_<name>.toml` uses the same geometry and one effect. This intentionally duplicates a tiny test fixture for isolated previews; the production scenes remain independent. The original battlefield is unchanged. Compare `scenes/circles_of_death_snow_1.toml` against `scenes/circles_of_death.toml`.
+Each `scenes/shader_lab_<name>.toml` uses the same geometry and one effect. This intentionally duplicates a tiny test fixture for isolated previews; the production scenes remain independent. The canonical `scenes/circles_of_death.toml` uses the preferred `snow_1` variant. The previous `battle_snow.wgsl` remains available for comparison by changing the effect configuration.
 
 ```toml
 [[effects]]
