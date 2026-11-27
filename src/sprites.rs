@@ -109,7 +109,7 @@ pub fn rasterize(shape: &Shape, base: &Path, fonts: &mut Option<FontSystem>) -> 
                 out.rgba[i+3] = (a + (old * (255-a) + 127)/255) as u8;
             });
             if clipped { bail!("Text glyph extends outside allocated sprite"); }
-            if !out.rgba.chunks_exact(4).any(|p| p[3] != 0) {
+            if !text.trim().is_empty() && !out.rgba.chunks_exact(4).any(|p| p[3] != 0) {
                 bail!("Text rendered no visible glyphs; check installed fonts");
             }
             // Trim the safety padding, retaining the original layout box and
@@ -137,6 +137,39 @@ pub fn rasterize(shape: &Shape, base: &Path, fonts: &mut Option<FontSystem>) -> 
         }
         _ => bail!("Only SVG and text shapes can be rasterized"),
     }
+}
+
+// Use one common canvas per sequence, so a short or blank frame never
+// stretches to fill the shape or shifts its neighbors.
+pub fn sequence_rasters(shape: &Shape, frames: &[&str], base: &Path, fonts: &mut Option<FontSystem>) -> Result<Vec<Raster>> {
+    let mut rasters = Vec::new();
+    let mut width = 1;
+    let mut height = 1;
+    let mut bytes = 0usize;
+    for text in frames {
+        let mut frame = shape.clone();
+        frame.text = Some((*text).to_owned());
+        let raster = rasterize(&frame, base, fonts)?;
+        width = width.max(raster.width);
+        height = height.max(raster.height);
+        bytes += raster.rgba.len();
+        if bytes > MAX_BYTES { bail!("Sequence raster budget exceeds 64 MiB"); }
+        rasters.push(raster);
+    }
+    if width as usize * height as usize * 4 * rasters.len() > MAX_BYTES {
+        bail!("Padded sequence textures exceed 64 MiB");
+    }
+    rasters.into_iter().map(|raster| {
+        if raster.width == width && raster.height == height { return Ok(raster); }
+        let mut canvas = Raster::blank(width, height)?;
+        for y in 0..raster.height as usize {
+            let from = y * raster.width as usize * 4;
+            let to = y * width as usize * 4;
+            let len = raster.width as usize * 4;
+            canvas.rgba[to..to+len].copy_from_slice(&raster.rgba[from..from+len]);
+        }
+        Ok(canvas)
+    }).collect()
 }
 
 #[cfg(test)]
