@@ -9,6 +9,20 @@ enabled = true
 sensitivity = 1.0
 
 [[layers]]
+name = "spectrum"
+[[layers.shapes]]
+kind = "spectrum"
+bars = 64
+origin = "bottom_center"
+position = [0.0, 0.02]
+size = [1.2, 0.2]
+color = "#71c4e8"
+opacity = 0.2
+gap = 0.25
+attack = 0.005
+decay = 0.08
+
+[[layers]]
 name = "bass halo"
 effects = [{ kind = "blur", intensity = 5.0 }]
 [[layers.shapes]]
