@@ -142,6 +142,55 @@ opacity = 0.46
 
 See `scenes/spaceship_loading.toml` for a combined SVG spacecraft, multiline Unicode HUD, and native radial rays. 
 
+### Responsive HUD positioning
+
+Any shape can use `origin` (top_left, top_center, top_right, center_left, center, center_right, bottom_left, bottom_center, bottom_right), `position` and `position_unit = "px"` or `"relative"`. Positive offsets from right/bottom edges point inward. `attachment` uses the same nine values and defaults to origin; it is also the rotation pivot. Pixel sizes use `size_unit = "px"`; relative sizes still use viewport height. Pixels are logical pixels in Wayland preview/live (integer scale) and output pixels in export. Do not combine origin/position with a named anchor or nondefault center.
+
+### SVG, text and dynamic HUD
+
+SVG shapes use `path` relative to the scene, `raster_size` (16..4096, default 1024), and optionally `preserve_color = true`. Text shapes use `text` (multiline Unicode supported), `font_size` (raster font size), `line_height` (multiplier), and optional `font_family` (defaults to monospace). Shape size controls the displayed dimensions; outlines are not supported on sprites.
+
+Named text sources can be shared by glow and foreground layers:
+
+```toml
+[text_sources.uplink]
+kind = "sequence"
+frames = ["WAITING", "WAITING.", "WAITING..", "WAITING..."]
+frame_seconds = 0.5
+default = "STANDBY"
+
+[text_sources.telemetry]
+kind = "command"
+command = ["bash", "scripts/telemetry.sh"]
+interval = 5.0
+timeout = 2.0
+default = "CPU   --%\nGPU   --%\nTEMP  --°C"
+layout = "CPU  100%\nGPU  100%\nTEMP 100°C"
+
+[[layers]]
+name = "HUD"
+[[layers.shapes]]
+kind = "text"
+text_source = "telemetry"
+origin = "top_right"
+position = [50, 50]
+position_unit = "px"
+size = [170, 72]
+size_unit = "px"
+color = "#b7dce8"
+```
+
+Sequences preload their textures, support blank frames, and snap their cycle to the scene loop when configured. Commands execute once per referenced source, not per shape or monitor. Arguments are passed directly to the program; the working directory is the scene directory. Stdout must be UTF-8 and at most 16384 bytes. Timeouts, unsuccessful exits and invalid/oversized output use the default. The optional layout string reserves a fixed text canvas; output exceeding that canvas also falls back. Text rasterization occurs only when the output changes.
+
+**Security:** commands are disabled unless you explicitly pass `--allow-commands` to preview or live. This grants the scene (including hot-reloaded edits) command execution with your user privileges. Only use it with trusted scene files and scripts. There is no sandbox. Manual pause displays defaults on the final visible frame and stops command polling; all-hidden suspension also stops polling. MP4 export never runs commands, warns, and uses defaults; sequences remain animated.
+
+```sh
+bash scenes/scripts/telemetry.sh
+cargo run --release -- preview scenes/spaceship_telemetry.toml --allow-commands
+```
+
+The demo script reads Linux procfs and sysfs. GPU utilization is the maximum available AMD GPU busy percentage, and temperature is the highest exposed Intel/AMD CPU package/control temperature. Missing sensors display `--`. The demo is separate from `spaceship_loading.toml`.
+
 Effects run in order. `intensity` is effect-specific; `period` is the animation period in seconds, and `pulse` modulates intensity cyclically.
 
 | Effect | Intensity | Notes |
