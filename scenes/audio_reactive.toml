@@ -35,7 +35,8 @@ outline = 0.01
 color = "#526d81"
 opacity = 0.7
 [layers.shapes.audio]
-signal = "bass"
+signal = "band"
+frequency = [40.0, 100.0]
 power = 2.0
 size = 0.4
 color = "#e8faff"
@@ -49,7 +50,8 @@ name = "rotating polygon"
 kind = "glitch"
 intensity = 0.0
 [layers.effects.audio]
-signal = "volume"
+signal = "band"
+frequency = [40.0, 100.0]
 power = 2.0
 intensity = 0.25
 attack = 0.005
@@ -62,7 +64,8 @@ outline = 0.025
 spin = 0.025
 color = "#b7dce8"
 [layers.shapes.audio]
-signal = "mid"
+signal = "band"
+frequency = [40.0, 100.0]
 power = 2.0
 spin = 0.2
 position = [0.005, 0.005]
@@ -73,7 +76,7 @@ decay = 0.08
 name = "signal legend"
 [[layers.shapes]]
 kind = "text"
-text = "AUDIO // REACTIVE\nBASS / MID / VOLUME"
+text = "AUDIO // REACTIVE\nBASS / 40-100 HZ"
 origin = "top_left"
 position = [30, 30]
 position_unit = "px"
