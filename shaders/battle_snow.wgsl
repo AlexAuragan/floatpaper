@@ -23,5 +23,5 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
     let d = flakes(uv, 33.0, vec2(-11.0, 29.0), 71.0);
     let e = flakes(uv, 21.0, vec2(-19.0, 37.0), 97.0);
     let alpha = clamp((a * 0.15 + b * 0.20 + c * 0.24 + d * 0.27 + e * 0.30) * params.strength, 0.0, 1.0);
-    return vec4(mix(base.rgb, vec3(0.68, 0.64, 0.65), alpha), base.a + alpha * (1.0 - base.a));
+    return vec4(mix(base.rgb, vec3(0.24, 0.21, 0.23), alpha), base.a + alpha * (1.0 - base.a));
 }
