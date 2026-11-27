@@ -34,6 +34,8 @@ Edit the scene while running to hot-reload it. Use `floatpaper pause`, `resume`,
 | [minimal](scenes/minimal.toml) | Basic shapes and animation |
 | [pure_black](scenes/pure_black.toml) | Layered effects |
 | [cutout](scenes/cutout.toml) | Cutouts, grids and glitch |
+| [cutout_reactive](scenes/cutout_reactive.toml) | Kick-driven glitch accents |
+| [pure_black_reactive](scenes/pure_black_reactive.toml) | Kick-driven glitch and bass-driven motion/rotation |
 | [spaceship](scenes/spaceship.toml) | Standalone sci-fi flight HUD; suitable for video export |
 | [spaceship_reactive](scenes/spaceship_reactive.toml) | Live ASCII telemetry, output volume and reactive orbital glow |
 | [spaceship_loading](scenes/spaceship_loading.toml) | SVG, rays, anchors and HUD |
@@ -43,11 +45,12 @@ Edit the scene while running to hot-reload it. Use `floatpaper pause`, `resume`,
 For the new reactive spacecraft, install `wireplumber` for `wpctl` (PipeWire output volume) and `libpulse` for audio capture:
 
 ```sh
-floatpaper preview scenes/spaceship_reactive.toml --allow-commands --allow-audio
-floatpaper live scenes/spaceship_reactive.toml --allow-commands --allow-audio
+floatpaper trust scenes/spaceship_reactive.toml
+floatpaper preview scenes/spaceship_reactive.toml
+floatpaper live scenes/spaceship_reactive.toml
 ```
 
-The standalone `spaceship.toml` requires neither integration flag and can be exported to MP4 for playback on other platforms. Floatpaper itself remains a Wayland application.
+The standalone `spaceship.toml` requires no command trust or audio capture and can be exported to MP4 for playback on other platforms. Floatpaper itself remains a Wayland application.
 
 For the original live telemetry example:
 
