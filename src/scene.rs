@@ -538,9 +538,11 @@ impl Scene {
                         let dx = (0.5 - attachment[0]) * sx;
                         let dy = (0.5 - attachment[1]) * sy;
                         // Rotate around the selected attachment, not the quad center.
-                        let (sin, cos) = angle.sin_cos();
-                        x += (dx * cos as f32 - dy * sin as f32) / aspect;
-                        y += dx * sin as f32 + dy * cos as f32;
+                        if dx != 0.0 || dy != 0.0 {
+                            let (sin, cos) = angle.sin_cos();
+                            x += (dx * cos as f32 - dy * sin as f32) / aspect;
+                            y += dx * sin as f32 + dy * cos as f32;
+                        }
                         let instance = Instance {
                             center_size: [x, y, sx, sy],
                             color: [color[0], color[1], color[2], alpha],
@@ -623,7 +625,7 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
             _ => {}
         }
         if !e.offset.iter().all(|v| v.is_finite()) {
-            bail!("Effect offset must contain finete values")
+            bail!("Effect offset must contain finite values")
         }
         if let Some(rotation) = e.rotation {
             if !rotation.is_finite() {
@@ -635,6 +637,15 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
         }
 
         parse_color(&e.color)?;
+        // Keep existing scenes compatible, but surface parameters that have no effect.
+        if e.kind != EffectKind::Custom {
+            if e.rotation.is_some() && e.kind == EffectKind::Noise { eprintln!("Warning: noise ignores rotation"); }
+            if e.kind != EffectKind::Grid {
+                if e.offset != [0.0, 0.0] { eprintln!("Warning: {:?} ignores offset", e.kind); }
+                if e.spacing != spacing_default() { eprintln!("Warning: {:?} ignores spacing", e.kind); }
+                if e.color != effect_color_default() { eprintln!("Warning: {:?} ignores color", e.kind); }
+            }
+        }
     }
     Ok(())
 }
@@ -676,7 +687,7 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
     }
