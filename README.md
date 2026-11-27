@@ -103,7 +103,44 @@ pulse = 0.15
 
 Layers are painted in file order, back to front. Each shape declaration generates `count` instances with deterministic random offsets, size variation and phases; use separate declarations with `count=1` to control shapes individually. Coordinates use the top-left origin and normalized screen coordinates (x and y each 0..1). Sizes are full bounding-box dimensions relative to viewport **height**, so equal x/y sizes retain their aspect ratio on wide monitors. Motion radii are in normalized screen coordinates. Shapes can drift offscreen. `wrap` moves horizontally, drawing translated edge copies. Colors accept `#RRGGBB` or `#RRGGBBAA`; layer and shape opacity multiply existing alpha. `outline=0` fills the shape; positive values produce a stroke. Shape rotation is in degrees, `spin` in signed turns per second, `phase` in cycles. `pulse` (0..1) modulates size.
 
-Shape types: `circle`, `rectangle`, `triangle`, `polygon` (3–32 `sides`). Motion types: `static`, `orbit`, `drift` (combined harmonics), `wrap`.
+Shape types: `circle`, `rectangle`, `triangle`, `polygon` (3–32 `sides`), `ray`, `svg`, `text`. Motion types: `static`, `orbit`, `drift` (combined harmonics), `wrap`, `radial`, `linear`.
+
+### Rays, directional motion and anchors
+
+```toml
+[anchors.ship]
+center = [0.69, 0.63]
+
+[[layers]]
+name = "flight streaks"
+[[layers.shapes]]
+kind = "ray"
+anchor = "ship"
+count = 85
+motion = "radial"
+direction = "inward"
+heading = 215.0
+angle_spread = 155.0
+radius = [0.22, 2.15]
+period = 3.0
+align_to_motion = true
+size = [0.20, 0.008]
+size_jitter = 0.65
+fade = 1.0
+glow = 0.85
+recycle_fade = 0.18
+color = "#a8d9ef"
+opacity = 0.46
+```
+
+- Rays are analytic quads: local +X is the head, `fade` (0..1) attenuates the tail, and `glow` (0..1) creates a soft transverse halo inside the specified width. No extra render pass or texture. Outline is unsupported for rays.
+- Radial motion uses `radius = [inner, outer]` in viewport-height units, `direction = "inward"` (default) or `"outward"`, and `heading` in clockwise degrees from screen right (90 is down). Multiple instances sample an emission cone of full angular width `angle_spread` (default 360); a single instance uses heading exactly. Existing spread offsets move individual centers independently; leave spread zero for a common convergence point.
+- Linear motion uses `travel = [dx, dy]` in viewport-height units, from center minus half travel to center plus half travel. Both motions repeat each period with seeded phase offsets for multiple instances. `recycle_fade` (0..0.5, default 0.15) fades opacity at the start/end of the cycle; zero disables fading.
+- `align_to_motion = true` points local +X along radial/linear velocity. Explicit rotation, spin and rotation_jitter remain additive. When aligned, omitted rotation_jitter defaults to zero instead of random rotation. To point an upright SVG along motion, add 90 degrees of rotation.
+- Anchors are static named normalized-screen positions shared across layers. `anchor = "ship"` replaces the shape's center; optional `anchor_offset = [dx, dy]` adds a normalized-screen offset. Changing the anchor moves all dependent shapes. Anchors are not hierarchical or animated in this version. Individual shapes can animate relative to their anchor.
+- Existing orbit/drift/wrap coordinates and behavior are unchanged; only radial/linear distances use viewport-height units for aspect-correct direction.
+
+See `scenes/spaceship_loading.toml` for a combined SVG spacecraft, multiline Unicode HUD, and native radial rays. 
 
 Effects run in order. `intensity` is effect-specific; `period` is the animation period in seconds, and `pulse` modulates intensity cyclically.
 
