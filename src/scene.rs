@@ -74,15 +74,18 @@ pub struct Scene {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TextSource {
     Sequence { frames: Vec<String>, frame_seconds: f64, default: String },
+    Command { command: Vec<String>, interval: f64, timeout: f64, default: String, #[serde(default)] layout: Option<String> },
 }
 impl TextSource {
     pub fn frames(&self) -> Vec<&str> {
-        match self { Self::Sequence { frames, default, .. } => std::iter::once(default.as_str()).chain(frames.iter().map(String::as_str)).collect() }
+        match self { Self::Sequence { frames, default, .. } => std::iter::once(default.as_str()).chain(frames.iter().map(String::as_str)).collect(), Self::Command { default, layout, .. } => vec![default.as_str(), layout.as_deref().unwrap_or(default.as_str())] }
     }
+    pub fn is_command(&self) -> bool { matches!(self, Self::Command { .. }) }
     // Frame zero is the explicit fallback. The remaining frames are cyclic.
     pub fn frame(&self, t: f64, duration: Option<f64>, paused: bool) -> usize {
         if paused { return 0; }
         match self {
+            Self::Command { .. } => 0,
             Self::Sequence { frames, frame_seconds, .. } => {
                 let rate = cyclic_rate(1.0 / (*frame_seconds * frames.len() as f64), duration);
                 1 + ((t * rate).rem_euclid(1.0) * frames.len() as f64).floor().min((frames.len()-1) as f64) as usize
@@ -287,6 +290,7 @@ impl Scene {
         scene.validate(path.parent().unwrap_or(Path::new(".")))?;
         Ok(scene)
     }
+    pub fn has_commands(&self) -> bool { self.text_sources.values().any(TextSource::is_command) }
     pub fn shape_count(&self) -> usize {
         self.layers
             .iter()
@@ -323,6 +327,11 @@ impl Scene {
                     if frames.is_empty() || frames.len() > 128 { bail!("Sequence {name} requires 1..=128 frames"); }
                     positive(*frame_seconds, "frame_seconds")?;
                     if frames.iter().chain(std::iter::once(default)).any(|s| s.len() > 16384) { bail!("Text source {name} exceeds 16384 bytes per frame"); }
+                }
+                TextSource::Command { command, interval, timeout, default, layout } => {
+                    if command.is_empty() || command[0].trim().is_empty() || command.len() > 128 || command.iter().any(|a| a.contains('\0') || a.len() > 16384) { bail!("Invalid command arguments for {name}"); }
+                    if !(0.25..=86400.0).contains(interval) || !(0.05..=60.0).contains(timeout) { bail!("Command {name}: interval must be 0.25..=86400s and timeout 0.05..=60s"); }
+                    if default.len() > 16384 || layout.as_ref().is_some_and(|s| s.len() > 16384) { bail!("Command {name}: default/layout exceeds 16384 bytes"); }
                 }
             }
         }
