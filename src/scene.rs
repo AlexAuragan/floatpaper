@@ -68,6 +68,27 @@ pub struct Scene {
     pub layers: Vec<Layer>,
     #[serde(default)]
     pub anchors: BTreeMap<String, Anchor>,
+    #[serde(default)] pub text_sources: BTreeMap<String, TextSource>,
+}
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TextSource {
+    Sequence { frames: Vec<String>, frame_seconds: f64, default: String },
+}
+impl TextSource {
+    pub fn frames(&self) -> Vec<&str> {
+        match self { Self::Sequence { frames, default, .. } => std::iter::once(default.as_str()).chain(frames.iter().map(String::as_str)).collect() }
+    }
+    // Frame zero is the explicit fallback. The remaining frames are cyclic.
+    pub fn frame(&self, t: f64, duration: Option<f64>, paused: bool) -> usize {
+        if paused { return 0; }
+        match self {
+            Self::Sequence { frames, frame_seconds, .. } => {
+                let rate = cyclic_rate(1.0 / (*frame_seconds * frames.len() as f64), duration);
+                1 + ((t * rate).rem_euclid(1.0) * frames.len() as f64).floor().min((frames.len()-1) as f64) as usize
+            }
+        }
+    }
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -201,6 +222,7 @@ pub struct Shape {
     pub composite: ShapeComposite,
     #[serde(default)] pub path: Option<PathBuf>,
     #[serde(default)] pub text: Option<String>,
+    #[serde(default)] pub text_source: Option<String>,
     #[serde(default)] pub font_family: Option<String>,
     #[serde(default = "font_size_default")] pub font_size: f32,
     #[serde(default = "line_height_default")] pub line_height: f32,
@@ -293,6 +315,17 @@ impl Scene {
         for (name, anchor) in &self.anchors {
             if name.trim().is_empty() || !anchor.center.iter().all(|v| v.is_finite() && v.abs() <= 100.0) { bail!("Invalid anchor {name}"); }
         }
+        if self.text_sources.len() > 64 { bail!("At most 64 text sources"); }
+        for (name, source) in &self.text_sources {
+            if name.trim().is_empty() { bail!("Empty text source name"); }
+            match source {
+                TextSource::Sequence { frames, frame_seconds, default } => {
+                    if frames.is_empty() || frames.len() > 128 { bail!("Sequence {name} requires 1..=128 frames"); }
+                    positive(*frame_seconds, "frame_seconds")?;
+                    if frames.iter().chain(std::iter::once(default)).any(|s| s.len() > 16384) { bail!("Text source {name} exceeds 16384 bytes per frame"); }
+                }
+            }
+        }
         for layer in &self.layers {
             unit(layer.opacity, "layer.opacity")?;
             parse_color(&layer.background)?;
@@ -307,13 +340,17 @@ impl Scene {
                         if shape.text.is_some() || shape.font_family.is_some() { bail!("SVG shape cannot use text fields"); }
                     }
                     ShapeKind::Text => {
-                        let text = shape.text.as_ref().context("Text shape requires text")?;
-                        if text.trim().is_empty() || text.len() > 16384 { bail!("Text must contain 1..=16384 bytes and visible content"); }
+                        match (&shape.text, &shape.text_source) {
+                            (Some(text), None) if text.len() <= 16384 => {},
+                            (None, Some(name)) if self.text_sources.contains_key(name) => {},
+                            _ => bail!("Text shape requires exactly one valid text or text_source (maximum 16384 bytes)"),
+                        }
                         if !(8.0..=256.0).contains(&shape.font_size) || !(0.5..=3.0).contains(&shape.line_height) { bail!("Invalid text font_size or line_height"); }
                         if shape.path.is_some() || shape.preserve_color { bail!("Text shapes use a tinted glyph mask, not path or preserve_color"); }
                     }
                     _ => if shape.path.is_some() || shape.text.is_some() || shape.font_family.is_some() || shape.preserve_color { bail!("Sprite fields require svg or text shape"); },
                 }
+                if !matches!(shape.kind, ShapeKind::Text) && shape.text_source.is_some() { bail!("text_source requires text shape"); }
                 if shape.kind.is_sprite() && shape.outline != 0.0 { bail!("Sprite shapes do not support analytic outline"); }
                 unit(shape.opacity, "shape.opacity")?;
                 unit(shape.fade, "shape.fade")?;
@@ -734,6 +771,15 @@ size_unit = "px"
             assert!((a[1]*h - a[3]*h/2. - 40.*scale).abs() < 0.001);
             assert!((a[2]*h - 240.*scale).abs() < 0.001);
         }
+    }
+    #[test]
+    fn text_sequence_loops_and_uses_default_when_paused() {
+        let source = TextSource::Sequence { frames: vec![" ".into(), ".".into()], frame_seconds: 0.5, default: "-".into() };
+        assert_eq!(source.frame(0.0, Some(10.), false), 1);
+        assert_eq!(source.frame(0.5, Some(10.), false), 2);
+        assert_eq!(source.frame(1.0, Some(10.), false), 1);
+        assert_eq!(source.frame(0.5, Some(10.), true), 0);
+        assert_eq!(source.frame(10.5, Some(10.), false), 2);
     }
     #[test]
     fn scene_repeats() {
