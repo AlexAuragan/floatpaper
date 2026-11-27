@@ -646,8 +646,8 @@ impl Scene {
                             * (1.0 - shape.pulse * 0.5 + shape.pulse * 0.5 * a.sin() as f32);
                         let alpha = color[3] * audio_opacity * motion_alpha;
                         // Smooth deterministic displacement along an instance-specific direction.
-                        x += audio_position[0] * (2.0*r(9)-1.0) as f32;
-                        y += audio_position[1] * (2.0*r(10)-1.0) as f32;
+                        if audio_position[0] != 0. { x += audio_position[0] * (2.0*r(9)-1.0) as f32; }
+                        if audio_position[1] != 0. { y += audio_position[1] * (2.0*r(10)-1.0) as f32; }
                         let angle_offset = if shape.count > 1 {
                             match shape.rotation_jitter {
                                 Some(jitter) => jitter * (2.0 * r(7) - 1.0) / 360.0,
