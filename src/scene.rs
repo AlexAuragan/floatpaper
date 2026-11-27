@@ -427,9 +427,11 @@ impl Scene {
             None => t,
         }
     }
+    #[cfg(test)]
     pub fn instances(&self, t: f64) -> Vec<LayerInstances> {
         self.instances_for_aspect(t, 1.0)
     }
+    #[cfg(test)]
     pub fn instances_for_aspect(&self, t: f64, aspect: f32) -> Vec<LayerInstances> {
         self.instances_for_viewport(t, aspect, 1.0, 1.0)
     }
