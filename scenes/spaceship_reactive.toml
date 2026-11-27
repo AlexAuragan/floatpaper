@@ -17,7 +17,7 @@ command = ["bash", "scripts/spaceship_hud.sh", "nav"]
 interval = 1.0
 timeout = 2.0
 default = "+- NAV / FLIGHT 01 -----------+\n| MODE    : CRUISE            |\n| VECTOR  : 125.04 DEG        |\n| TRACK   : AUTO              |\n| CLOCK   : --:--:--          |\n+-----------------------------+"
-layout = "+- NAV / FLIGHT 01 8888888888-+\n| MODE    : CRUISE            |\n| VECTOR  : 125.04 DEG        |\n| TRACK   : AUTO              |\n| CLOCK   : 88:88:88          |\n+8888888888888888888888888888-+"
+layout = "+- NAV / FLIGHT 01 -----------+\n| MODE    : CRUISE            |\n| VECTOR  : 125.04 DEG        |\n| TRACK   : AUTO              |\n| CLOCK   : --:--:--          |\n+-----------------------------+"
 
 [text_sources.core]
 kind = "command"
@@ -25,7 +25,7 @@ command = ["bash", "scripts/spaceship_hud.sh", "core"]
 interval = 5.0
 timeout = 2.0
 default = "+- CORE / TELEMETRY ----------+\n| CPU BUS :  --%              |\n| GPU BUS :  --%              |\n| THERMAL :  -- C             |\n| STATUS  : STANDBY           |\n+-----------------------------+"
-layout = "+- CORE / TELEMETRY 8888888888+\n| CPU BUS :  88%              |\n| GPU BUS :  88%              |\n| THERMAL :  88 C             |\n| STATUS  : STANDBY           |\n+8888888888888888888888888888-+"
+layout = "+- CORE / TELEMETRY ----------+\n| CPU BUS :  --%              |\n| GPU BUS :  --%              |\n| THERMAL :  -- C             |\n| STATUS  : STANDBY           |\n+-----------------------------+"
 
 [text_sources.uplink]
 kind = "command"
@@ -33,7 +33,7 @@ command = ["bash", "scripts/spaceship_hud.sh", "uplink"]
 interval = 1.0
 timeout = 2.0
 default = "+- COMMS / UPLINK ------------+\n| CHANNEL : 01                |\n| GAIN    :  --%              |\n| [--------------------]      |\n| STATUS  : STANDBY           |\n+-----------------------------+"
-layout = "+- COMMS / UPLINK 888888888888+\n| CHANNEL : 01                |\n| GAIN    :  88%              |\n| [88888888888888888888]      |\n| STATUS  : STANDBY           |\n+8888888888888888888888888888-+"
+layout = "+- COMMS / UPLINK ------------+\n| CHANNEL : 01                |\n| GAIN    :  --%              |\n| [--------------------]      |\n| STATUS  : STANDBY           |\n+-----------------------------+"
 
 [[layers]]
 name = "distant star halos"
