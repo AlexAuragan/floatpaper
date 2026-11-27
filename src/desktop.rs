@@ -76,8 +76,9 @@ struct SharedFrame {
     rendered_at:Option<Instant>,
 }
 impl SharedFrame {
-    fn new(gpu:&Gpu,key:RenderKey)->Self {
+    fn new(gpu:&Gpu,key:RenderKey)->Result<Self> {
         let d=&gpu.device;
+        d.push_error_scope(wgpu::ErrorFilter::Validation);
         let texture=d.create_texture(&wgpu::TextureDescriptor {
             label:Some("shared output frame"),size:crate::renderer::extent(key.width,key.height),
             mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:key.format,
@@ -122,7 +123,10 @@ impl SharedFrame {
                 targets:&[Some(wgpu::ColorTargetState{format:key.format,blend:None,write_mask:wgpu::ColorWrites::ALL})]}),
             multiview:None,
         });
-        Self{texture,view,bind,blit,rendered_at:None}
+        if let Some(error)=pollster::block_on(d.pop_error_scope()) {
+            bail!("Shared frame GPU validation: {error}");
+        }
+        Ok(Self{texture,view,bind,blit,rendered_at:None})
     }
     fn present(&self,encoder:&mut wgpu::CommandEncoder,frame:&wgpu::Texture,config:&wgpu::SurfaceConfiguration) {
         if config.usage.contains(wgpu::TextureUsages::COPY_DST) {
@@ -152,7 +156,8 @@ type RenderPool=HashMap<RenderKey,RenderGroup>;
 fn new_group(gpu:&Gpu,scene:&Scene,base:&Path,key:RenderKey,shared:bool)->Result<RenderGroup> {
     let mut renderer=Renderer::new(gpu,scene.clone(),base,key.width,key.height,key.format)?;
     renderer.enable_profile(gpu,key.label());
-    Ok(RenderGroup{renderer,shared:shared.then(||SharedFrame::new(gpu,key))})
+    let shared=if shared {Some(SharedFrame::new(gpu,key)?)} else {None};
+    Ok(RenderGroup{renderer,shared})
 }
 
 fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene,base:&Path,share:bool)->Result<()> {
@@ -168,7 +173,7 @@ fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene
         let shared=count>1;
         if let Some(group)=pool.get_mut(&key) {
             if shared && group.shared.is_none() {
-                group.shared=Some(SharedFrame::new(gpu,key));
+                group.shared=Some(SharedFrame::new(gpu,key)?);
                 eprintln!("Shared rendering: {} ({count} outputs)",key.label());
             } else if !shared {
                 group.shared=None;
@@ -261,7 +266,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             if screen.closed { screen.render.take(); continue; }
             if !screen.configured { continue; }
             if screen.pending || screen.render.is_none() {
-                configure(&instance,&connection,&gpu,screen)?;
+                configure(&instance,&connection,&gpu,screen,share)?;
                 screen.pending=false;
             }
         }
@@ -315,7 +320,7 @@ fn make_surface(instance:&wgpu::Instance,connection:&Connection,surface:&wl_surf
     // SAFETY: the caller keeps the connection and wl_surface alive until this wgpu surface is dropped.
     unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle { raw_display_handle:RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display_ptr)),raw_window_handle:RawWindowHandle::Wayland(WaylandWindowHandle::new(surface_ptr)) }) }.context("Create wgpu Wayland surface")
 }
-fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mut Screen)->Result<()> {
+fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mut Screen,share:bool)->Result<()> {
     let width=screen.logical.0.checked_mul(screen.scale as u32).context("Output width overflow")?;
     let height=screen.logical.1.checked_mul(screen.scale as u32).context("Output height overflow")?;
     crate::renderer::check_size(gpu,width,height)?;
@@ -328,12 +333,12 @@ fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mu
         let format=caps.formats.iter().copied().find(|f|f.is_srgb()).or_else(||caps.formats.first().copied()).context("GPU cannot present to this output")?;
         let alpha_mode=if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) { wgpu::CompositeAlphaMode::Opaque } else { *caps.alpha_modes.first().context("No supported alpha modes")? };
         let mut usage=wgpu::TextureUsages::RENDER_ATTACHMENT;
-        if caps.usages.contains(wgpu::TextureUsages::COPY_DST) { usage|=wgpu::TextureUsages::COPY_DST; }
+        if share && caps.usages.contains(wgpu::TextureUsages::COPY_DST) { usage|=wgpu::TextureUsages::COPY_DST; }
         let config=wgpu::SurfaceConfiguration { usage,format,width,height,present_mode:wgpu::PresentMode::Fifo,desired_maximum_frame_latency:2,alpha_mode,view_formats:vec![] };
         surface.configure(&gpu.device,&config);
         screen.render=Some(RenderSurface{surface,config});
         eprintln!("Surface {width}x{height} ({format:?}; shared frame transfer: {})",
-            if usage.contains(wgpu::TextureUsages::COPY_DST) {"copy"} else {"blit"});
+            if !share {"disabled"} else if usage.contains(wgpu::TextureUsages::COPY_DST) {"copy"} else {"blit"});
     }
     Ok(())
 }
