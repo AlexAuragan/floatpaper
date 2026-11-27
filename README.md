@@ -147,6 +147,12 @@ The default noise shader uses one PCG hash per temporal endpoint (two per pixel)
 
 Set `FLOATPAPER_LEGACY_NOISE=1` at startup to use the original four-hash shader, for visual comparisons, benchmarks or reproduction of previous renders. No scene changes or additional noise textures are required.
 
+## Final effect fusion
+
+When the last global effect is a single-pass built-in, Floatpaper renders it directly into the output texture and performs the presentation color conversion in the same shader. The preceding effects still use RGBA16Float intermediates. Custom effects, two-pass blur, and scenes with no global effects retain the separate presentation pass.
+
+Set `FLOATPAPER_DISABLE_FINAL_FUSION=1` to compare with the original two-pass path. The profiler reports the combined pass as, for example, `crt_present`; compare it with the sum of the old CRT and present categories. The optimization removes one intermediate FP16 rounding step and a same-resolution texture sample, so small output rounding differences are possible in both live mode and export.
+
 ## GPU profiling (live or preview)
 
 Run with the optional timestamp profiler enabled:
