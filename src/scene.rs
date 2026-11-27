@@ -767,9 +767,54 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
+    }
+    #[test]
+    fn audio_modulation_changes_shape_and_effect_without_restarting_rotation() {
+        let s: Scene = toml::from_str(r#"
+[audio]
+enabled = true
+[[layers]]
+name = "audio"
+[[layers.effects]]
+kind = "blur"
+intensity = 1.0
+[layers.effects.audio]
+signal = "bass"
+attack = 0.0
+decay = 0.0
+intensity = 3.0
+[[layers.shapes]]
+kind = "rectangle"
+size = [0.1,0.2]
+opacity = 0.5
+color = "#000000"
+[layers.shapes.audio]
+signal = "bass"
+attack = 0.0
+decay = 0.0
+size = 0.5
+spin = 0.25
+opacity = 0.5
+color = "#ffffff"
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
+        let responses = s.audio_responses();
+        assert_eq!(responses.len(),1);
+        let mut frame = audio::Frame::default();
+        frame.advance(audio::Signals { bass: 1., ..Default::default() }, &responses, 1., true);
+        let a = s.instances_with_audio(0.,1920.,1080.,1.,&frame)[0].over[0];
+        assert!((a.center_size[2]-0.15).abs()<1e-6);
+        assert_eq!(a.color,[1.,1.,1.,1.]);
+        assert!((a.params[0]-std::f32::consts::FRAC_PI_2).abs()<1e-6);
+        assert_eq!(effect_values(&s.layers[0].effects[0],0.,None,&frame).0,4.);
+        frame.advance(audio::Signals::default(),&responses,1.,true);
+        let b = s.instances_with_audio(0.,1920.,1080.,1.,&frame)[0].over[0];
+        assert_eq!(a.params[0],b.params[0]);
+        assert!((b.center_size[2]-0.1).abs()<1e-6);
+        assert_eq!(effect_values(&s.layers[0].effects[0],0.,None,&frame).0,1.);
     }
     #[test]
     fn cutouts_are_separate_and_loop() {
