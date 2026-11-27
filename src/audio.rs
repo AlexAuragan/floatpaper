@@ -19,6 +19,8 @@ pub struct Signals {
     pub mid: f32,
     pub treble: f32,
     pub volume: f32,
+    pub onset_strength: f32,
+    pub kick_strength: f32,
     pub onset_count: u64,
     pub kick_count: u64,
 }
@@ -37,6 +39,7 @@ struct Peaks {
     previous_audible: bool,
     cooldown: f32,
     envelope: f32,
+    strength: f32,
     count: u64,
 }
 impl Peaks {
@@ -46,6 +49,7 @@ impl Peaks {
         if self.cooldown == 0. && self.previous_audible
             && self.previous > self.older && self.previous >= flux
             && self.previous > self.threshold {
+            self.strength = (self.previous / self.threshold.max(0.002) / 4.0).clamp(0.15, 1.0);
             self.envelope = 1.;
             self.count += 1;
             self.cooldown = 0.09;
@@ -126,6 +130,8 @@ impl Analyzer {
         let ready = self.filled == WINDOW;
         self.signals.onset = self.onset.update(novelty, ready && volume > 0.003, self.sensitivity);
         self.signals.kick = self.kick.update(kick_novelty, ready && kick_energy.sqrt() > 0.003, self.sensitivity);
+        self.signals.onset_strength = self.onset.strength;
+        self.signals.kick_strength = self.kick.strength;
         self.signals.onset_count = self.onset.count;
         self.signals.kick_count = self.kick.count;
         let smooth = |old: f32, rms: f32| {
@@ -204,6 +210,50 @@ fn capture(target: Option<&str>, sensitivity: f32, running: &AtomicBool, output:
         }
     }
     Ok(())
+}
+
+// Live capture owns one worker per desktop, not per renderer/output.
+pub struct LiveAudio {
+    running: Arc<AtomicBool>,
+    values: Arc<Mutex<Signals>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+impl LiveAudio {
+    pub fn new() -> Self {
+        Self { running: Arc::new(AtomicBool::new(false)), values: Arc::new(Mutex::new(Signals::default())), worker: None }
+    }
+    pub fn set_active(&mut self, active: bool, sensitivity: f32) {
+        if !active {
+            self.running.store(false, Ordering::Release);
+            if let Some(worker) = self.worker.take() {
+                if worker.join().is_err() { eprintln!("Audio worker panicked"); }
+            }
+            *self.values.lock().expect("audio mutex poisoned") = Signals::default();
+        } else if self.worker.is_none() {
+            self.running.store(true, Ordering::Release);
+            let running = self.running.clone();
+            let values = self.values.clone();
+            match thread::Builder::new().name("floatpaper-audio".into()).spawn(move || {
+                while running.load(Ordering::Acquire) {
+                    if let Err(e) = capture(None, sensitivity, &running, &values) {
+                        eprintln!("Audio capture: {e:#}; using silence, retrying in 5s");
+                        *values.lock().expect("audio mutex poisoned") = Signals::default();
+                        for _ in 0..100 {
+                            if !running.load(Ordering::Acquire) { break; }
+                            thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                }
+            }) {
+                Ok(worker) => self.worker = Some(worker),
+                Err(e) => { eprintln!("Start audio worker: {e}"); self.running.store(false, Ordering::Release); }
+            }
+        }
+    }
+    pub fn snapshot(&self) -> Signals { *self.values.lock().expect("audio mutex poisoned") }
+}
+impl Drop for LiveAudio {
+    fn drop(&mut self) { self.set_active(false, 1.0); }
 }
 
 pub fn diagnose(target: Option<String>, sensitivity: f32) -> Result<()> {
