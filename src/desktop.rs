@@ -489,7 +489,7 @@ pub fn run(path:&Path,mode:Mode,allow_commands:bool,allow_audio:bool)->Result<()
         let audio_now=Instant::now();
         let audio_dt=audio_now.saturating_duration_since(audio_last).as_secs_f64().min(0.1);
         audio_last=audio_now;
-        if audio_active || scene.audio.enabled {
+        if allow_audio && scene.audio.enabled {
             audio_frame.advance(audio.snapshot(),&audio_responses,audio_dt,audio_active);
         }
         let command_values=commands.snapshot();
