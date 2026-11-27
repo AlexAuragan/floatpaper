@@ -1099,7 +1099,11 @@ fn compile_effects(
             let bodies: Vec<(&str, Cow<'_, str>)> = match e.kind {
                 EffectKind::Noise => vec![(
                     "noise",
-                    Cow::Borrowed(include_str!("../shaders/noise.wgsl")),
+                    Cow::Borrowed(if std::env::var_os("FLOATPAPER_LEGACY_NOISE").is_some() {
+                        include_str!("../shaders/noise.wgsl")
+                    } else {
+                        include_str!("../shaders/noise_fast.wgsl")
+                    }),
                 )],
                 EffectKind::Crt => {
                     vec![("crt", Cow::Borrowed(include_str!("../shaders/crt.wgsl")))]
