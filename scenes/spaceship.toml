@@ -263,81 +263,81 @@ effects = [{ kind = "blur", intensity = 2.8 }]
 
 [[layers.shapes]]
 kind = "text"
-text = "+- NAV / FLIGHT 01 -----------+\n| MODE    : CRUISE            |\n| VECTOR  : 125.04 DEG        |\n| TRACK   : AUTO              |\n| CLOCK   : 08:42:16          |\n+-----------------------------+"
+text = "┌─ 01 / NAVIGATION          \n  CRUISE         AUTO       \n  HDG         125.04°       \n  MET        08:42:16       \n└────────────────────────── "
 origin = "top_left"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#71c4e8"
-opacity = 0.28
+opacity = 0.18
 
 [[layers.shapes]]
 kind = "text"
-text = "+- CORE / TELEMETRY ----------+\n| CPU BUS :  24%              |\n| GPU BUS :  38%              |\n| THERMAL :  46 C             |\n| STATUS  : SIMULATION        |\n+-----------------------------+"
+text = "┌─ 02 / PROPULSION          \n  ΔV          8.42 km/s     \n  REACTOR         84%       \n  SHIELD         100%       \n└────────────────────────── "
 origin = "top_right"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#71c4e8"
-opacity = 0.28
+opacity = 0.18
 
 [[layers.shapes]]
 kind = "text"
-text = "+- COMMS / UPLINK ------------+\n| CHANNEL : 01                |\n| GAIN    :  42%              |\n| [########------------]      |\n| STATUS  : STANDBY           |\n+-----------------------------+"
+text = "┌─ 03 / DEEP LINK           \n  ACQUIRING       42%       \n  ▰▰▰▰▰▰░░░░░░░░            \n  SECTOR          07        \n└────────────────────────── "
 origin = "bottom_left"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#71c4e8"
-opacity = 0.28
+opacity = 0.18
 
 [[layers]]
 name = "HUD readouts"
 
 [[layers.shapes]]
 kind = "text"
-text = "+- NAV / FLIGHT 01 -----------+\n| MODE    : CRUISE            |\n| VECTOR  : 125.04 DEG        |\n| TRACK   : AUTO              |\n| CLOCK   : 08:42:16          |\n+-----------------------------+"
+text = "┌─ 01 / NAVIGATION          \n  CRUISE         AUTO       \n  HDG         125.04°       \n  MET        08:42:16       \n└────────────────────────── "
 origin = "top_left"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#b7dce8"
-opacity = 0.82
+opacity = 0.72
 
 [[layers.shapes]]
 kind = "text"
-text = "+- CORE / TELEMETRY ----------+\n| CPU BUS :  24%              |\n| GPU BUS :  38%              |\n| THERMAL :  46 C             |\n| STATUS  : SIMULATION        |\n+-----------------------------+"
+text = "┌─ 02 / PROPULSION          \n  ΔV          8.42 km/s     \n  REACTOR         84%       \n  SHIELD         100%       \n└────────────────────────── "
 origin = "top_right"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#b7dce8"
-opacity = 0.82
+opacity = 0.72
 
 [[layers.shapes]]
 kind = "text"
-text = "+- COMMS / UPLINK ------------+\n| CHANNEL : 01                |\n| GAIN    :  42%              |\n| [########------------]      |\n| STATUS  : STANDBY           |\n+-----------------------------+"
+text = "┌─ 03 / DEEP LINK           \n  ACQUIRING       42%       \n  ▰▰▰▰▰▰░░░░░░░░            \n  SECTOR          07        \n└────────────────────────── "
 origin = "bottom_left"
 position = [40, 40]
 position_unit = "px"
-size = [260, 92]
+size = [224, 85]
 size_unit = "px"
 font_size = 64.0
-line_height = 1.05
+line_height = 1.2
 color = "#b7dce8"
-opacity = 0.82
+opacity = 0.72
