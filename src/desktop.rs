@@ -5,7 +5,7 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use notify::{EventKind, RecursiveMode, Watcher};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle};
-use std::{collections::BTreeMap, path::{Path,PathBuf}, ptr::NonNull, sync::{Arc,atomic::{AtomicBool,Ordering},mpsc}, time::{Duration,Instant}};
+use std::{collections::{BTreeMap,HashMap}, path::{Path,PathBuf}, ptr::NonNull, sync::{Arc,atomic::{AtomicBool,Ordering},mpsc}, time::{Duration,Instant}};
 use wayland_client::{Connection,Dispatch,Proxy,QueueHandle,delegate_noop,protocol::{wl_callback,wl_compositor,wl_output,wl_region,wl_registry,wl_surface}};
 use wayland_protocols::xdg::shell::client::{xdg_surface,xdg_toplevel,xdg_wm_base};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1,zwlr_layer_surface_v1};
@@ -45,7 +45,142 @@ impl Drop for Screen {
         self.surface.destroy();
     }
 }
-struct RenderSurface { surface:wgpu::Surface<'static>, config:wgpu::SurfaceConfiguration, renderer:Renderer }
+struct RenderSurface { surface:wgpu::Surface<'static>, config:wgpu::SurfaceConfiguration }
+
+#[derive(Clone,Copy,Debug,PartialEq,Eq,Hash)]
+struct RenderKey {
+    width:u32,
+    height:u32,
+    format:wgpu::TextureFormat,
+    // Isolate outputs when sharing is disabled (including preview).
+    isolated:Option<u32>,
+}
+impl RenderKey {
+    fn new(config:&wgpu::SurfaceConfiguration,id:u32,share:bool)->Self {
+        Self {width:config.width,height:config.height,format:config.format,
+            isolated:if share {None} else {Some(id)}}
+    }
+    fn label(self)->String {
+        match self.isolated {
+            Some(id)=>format!("surface={id}"),
+            None=>format!("group={}x{}:{:?}",self.width,self.height,self.format),
+        }
+    }
+}
+
+struct SharedFrame {
+    texture:wgpu::Texture,
+    view:wgpu::TextureView,
+    bind:wgpu::BindGroup,
+    blit:wgpu::RenderPipeline,
+    rendered_at:Option<Instant>,
+}
+impl SharedFrame {
+    fn new(gpu:&Gpu,key:RenderKey)->Self {
+        let d=&gpu.device;
+        let texture=d.create_texture(&wgpu::TextureDescriptor {
+            label:Some("shared output frame"),size:crate::renderer::extent(key.width,key.height),
+            mip_level_count:1,sample_count:1,dimension:wgpu::TextureDimension::D2,format:key.format,
+            usage:wgpu::TextureUsages::RENDER_ATTACHMENT|wgpu::TextureUsages::COPY_SRC|wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats:&[],
+        });
+        let view=texture.create_view(&Default::default());
+        let layout=d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label:Some("shared frame blit layout"),
+            entries:&[wgpu::BindGroupLayoutEntry {
+                binding:0,visibility:wgpu::ShaderStages::FRAGMENT,
+                ty:wgpu::BindingType::Texture {sample_type:wgpu::TextureSampleType::Float{filterable:false},
+                    view_dimension:wgpu::TextureViewDimension::D2,multisampled:false},count:None,
+            }],
+        });
+        let bind=d.create_bind_group(&wgpu::BindGroupDescriptor {
+            label:Some("shared frame blit input"),layout:&layout,
+            entries:&[wgpu::BindGroupEntry{binding:0,resource:wgpu::BindingResource::TextureView(&view)}],
+        });
+        let shader=d.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label:Some("shared frame blit"),
+            source:wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(r#"
+@group(0) @binding(0) var source: texture_2d<f32>;
+@vertex fn vs_main(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    var p = array<vec2<f32>,3>(vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0));
+    return vec4(p[i],0.0,1.0);
+}
+@fragment fn fs_main(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    return textureLoad(source,vec2<i32>(p.xy),0);
+}
+"#)),
+        });
+        let pipeline_layout=d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label:Some("shared frame blit pipeline layout"),bind_group_layouts:&[&layout],push_constant_ranges:&[],
+        });
+        let blit=d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label:Some("shared frame blit"),layout:Some(&pipeline_layout),
+            vertex:wgpu::VertexState{module:&shader,entry_point:"vs_main",buffers:&[]},
+            primitive:wgpu::PrimitiveState::default(),depth_stencil:None,
+            multisample:wgpu::MultisampleState::default(),
+            fragment:Some(wgpu::FragmentState{module:&shader,entry_point:"fs_main",
+                targets:&[Some(wgpu::ColorTargetState{format:key.format,blend:None,write_mask:wgpu::ColorWrites::ALL})]}),
+            multiview:None,
+        });
+        Self{texture,view,bind,blit,rendered_at:None}
+    }
+    fn present(&self,encoder:&mut wgpu::CommandEncoder,frame:&wgpu::Texture,config:&wgpu::SurfaceConfiguration) {
+        if config.usage.contains(wgpu::TextureUsages::COPY_DST) {
+            encoder.copy_texture_to_texture(
+                wgpu::ImageCopyTexture{texture:&self.texture,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},
+                wgpu::ImageCopyTexture{texture:frame,mip_level:0,origin:wgpu::Origin3d::ZERO,aspect:wgpu::TextureAspect::All},
+                crate::renderer::extent(config.width,config.height),
+            );
+        } else {
+            // Same-format unfiltered texel fetch; sRGB decode/encode is paired.
+            let view=frame.create_view(&Default::default());
+            let mut pass=encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label:Some("shared frame blit"),color_attachments:&[Some(wgpu::RenderPassColorAttachment {
+                    view:&view,resolve_target:None,ops:wgpu::Operations{load:wgpu::LoadOp::Clear(wgpu::Color::BLACK),store:wgpu::StoreOp::Store},
+                })],depth_stencil_attachment:None,timestamp_writes:None,occlusion_query_set:None,
+            });
+            pass.set_pipeline(&self.blit);
+            pass.set_bind_group(0,&self.bind,&[]);
+            pass.draw(0..3,0..1);
+        }
+    }
+}
+
+struct RenderGroup { renderer:Renderer, shared:Option<SharedFrame> }
+type RenderPool=HashMap<RenderKey,RenderGroup>;
+
+fn new_group(gpu:&Gpu,scene:&Scene,base:&Path,key:RenderKey,shared:bool)->Result<RenderGroup> {
+    let mut renderer=Renderer::new(gpu,scene.clone(),base,key.width,key.height,key.format)?;
+    renderer.enable_profile(gpu,key.label());
+    Ok(RenderGroup{renderer,shared:shared.then(||SharedFrame::new(gpu,key))})
+}
+
+fn reconcile_renderers(gpu:&Gpu,state:&Desktop,pool:&mut RenderPool,scene:&Scene,base:&Path,share:bool)->Result<()> {
+    let mut counts=HashMap::<RenderKey,usize>::new();
+    for (&id,screen) in &state.surfaces {
+        if screen.closed {continue;}
+        if let Some(r)=&screen.render {
+            *counts.entry(RenderKey::new(&r.config,id,share)).or_default()+=1;
+        }
+    }
+    pool.retain(|key,_|counts.contains_key(key));
+    for (key,count) in counts {
+        let shared=count>1;
+        if let Some(group)=pool.get_mut(&key) {
+            if shared && group.shared.is_none() {
+                group.shared=Some(SharedFrame::new(gpu,key));
+                eprintln!("Shared rendering: {} ({count} outputs)",key.label());
+            } else if !shared {
+                group.shared=None;
+            }
+        } else {
+            let group=new_group(gpu,scene,base,key,shared)?;
+            if shared {eprintln!("Shared rendering: {} ({count} outputs)",key.label());}
+            pool.insert(key,group);
+        }
+    }
+    Ok(())
+}
 
 pub fn run(path:&Path,mode:Mode)->Result<()> {
     let path=path.canonicalize().context("Scene path does not exist")?;
@@ -92,6 +227,8 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
     let running=Arc::new(AtomicBool::new(true));
     let r=running.clone();
     ctrlc::set_handler(move||r.store(false,Ordering::SeqCst)).context("Install Ctrl-C handler")?;
+    let share=matches!(&mode,Mode::Live{..}) && std::env::var_os("FLOATPAPER_DISABLE_OUTPUT_SHARING").is_none();
+    let mut pool=RenderPool::new();
     let start=Instant::now();
     let mut reload_at=None;
     let mut last_watch_error=None;
@@ -111,7 +248,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
         }
         if reload_at.is_some_and(|t|Instant::now()>=t) {
             reload_at=None;
-            match reload(&gpu,&mut state,&path) {
+            match reload(&gpu,&mut pool,&path) {
                 Ok(new_scene)=>{ scene=new_scene; eprintln!("Reloaded {}",path.display()); },
                 Err(e)=>eprintln!("Reload rejected; retaining last valid scene: {e:#}"),
             }
@@ -124,16 +261,22 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             if screen.closed { screen.render.take(); continue; }
             if !screen.configured { continue; }
             if screen.pending || screen.render.is_none() {
-                configure(&instance,&connection,&gpu,screen,&scene,base)?;
+                configure(&instance,&connection,&gpu,screen)?;
                 screen.pending=false;
             }
-            if !screen.ready { continue; }
+        }
+        reconcile_renderers(&gpu,&state,&mut pool,&scene,base,share)?;
+        for (&id,screen) in &mut state.surfaces {
+            if screen.closed || !screen.configured || !screen.ready { continue; }
+            let r=screen.render.as_ref().context("Surface not configured")?;
+            let key=RenderKey::new(&r.config,id,share);
+            let group=pool.get_mut(&key).context("Missing render group")?;
             if let Some(last)=screen.last_frame {
                 let remaining=interval.saturating_sub(now.saturating_duration_since(last));
                 if !remaining.is_zero() { timeout=timeout.min(remaining); continue; }
             }
             let frame_time=now.duration_since(start).as_secs_f64();
-            if draw(&gpu,screen,&qh,frame_time)? { screen.last_frame=Some(now); }
+            if draw(&gpu,screen,group,&qh,frame_time,now,interval)? { screen.last_frame=Some(now); }
             else { timeout=timeout.min(interval); }
         }
         event_loop.dispatch(timeout,&mut state).context("Dispatch Wayland events")?;
@@ -172,12 +315,11 @@ fn make_surface(instance:&wgpu::Instance,connection:&Connection,surface:&wl_surf
     // SAFETY: the caller keeps the connection and wl_surface alive until this wgpu surface is dropped.
     unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle { raw_display_handle:RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display_ptr)),raw_window_handle:RawWindowHandle::Wayland(WaylandWindowHandle::new(surface_ptr)) }) }.context("Create wgpu Wayland surface")
 }
-fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mut Screen,scene:&Scene,base:&Path)->Result<()> {
+fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mut Screen)->Result<()> {
     let width=screen.logical.0.checked_mul(screen.scale as u32).context("Output width overflow")?;
     let height=screen.logical.1.checked_mul(screen.scale as u32).context("Output height overflow")?;
     crate::renderer::check_size(gpu,width,height)?;
     if let Some(r)=&mut screen.render {
-        r.renderer.resize(gpu,width,height)?;
         r.config.width=width; r.config.height=height;
         r.surface.configure(&gpu.device,&r.config);
     } else {
@@ -185,17 +327,17 @@ fn configure(instance:&wgpu::Instance,connection:&Connection,gpu:&Gpu,screen:&mu
         let caps=surface.get_capabilities(&gpu.adapter);
         let format=caps.formats.iter().copied().find(|f|f.is_srgb()).or_else(||caps.formats.first().copied()).context("GPU cannot present to this output")?;
         let alpha_mode=if caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque) { wgpu::CompositeAlphaMode::Opaque } else { *caps.alpha_modes.first().context("No supported alpha modes")? };
-        let config=wgpu::SurfaceConfiguration { usage:wgpu::TextureUsages::RENDER_ATTACHMENT,format,width,height,present_mode:wgpu::PresentMode::Fifo,desired_maximum_frame_latency:2,alpha_mode,view_formats:vec![] };
-        let mut renderer=Renderer::new(gpu,scene.clone(),base,width,height,format)?;
-        let id=*screen.surface.data::<u32>().context("Missing surface id")?;
-        renderer.enable_profile(gpu,format!("surface={id}"));
+        let mut usage=wgpu::TextureUsages::RENDER_ATTACHMENT;
+        if caps.usages.contains(wgpu::TextureUsages::COPY_DST) { usage|=wgpu::TextureUsages::COPY_DST; }
+        let config=wgpu::SurfaceConfiguration { usage,format,width,height,present_mode:wgpu::PresentMode::Fifo,desired_maximum_frame_latency:2,alpha_mode,view_formats:vec![] };
         surface.configure(&gpu.device,&config);
-        screen.render=Some(RenderSurface{surface,config,renderer});
-        eprintln!("Surface {width}x{height} ({format:?})");
+        screen.render=Some(RenderSurface{surface,config});
+        eprintln!("Surface {width}x{height} ({format:?}; shared frame transfer: {})",
+            if usage.contains(wgpu::TextureUsages::COPY_DST) {"copy"} else {"blit"});
     }
     Ok(())
 }
-fn draw(gpu:&Gpu,screen:&mut Screen,qh:&QueueHandle<Desktop>,t:f64)->Result<bool> {
+fn draw(gpu:&Gpu,screen:&mut Screen,group:&mut RenderGroup,qh:&QueueHandle<Desktop>,t:f64,now:Instant,interval:Duration)->Result<bool> {
     let r=screen.render.as_mut().context("Surface not configured")?;
     let frame=match r.surface.get_current_texture() {
         Ok(f)=>f,
@@ -203,9 +345,22 @@ fn draw(gpu:&Gpu,screen:&mut Screen,qh:&QueueHandle<Desktop>,t:f64)->Result<bool
         Err(wgpu::SurfaceError::Timeout)=>{eprintln!("Wayland surface acquisition timed out");return Ok(false);},
         Err(wgpu::SurfaceError::OutOfMemory)=>bail!("GPU surface out of memory"),
     };
-    let view=frame.texture.create_view(&Default::default());
     let mut encoder=gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor{label:Some("live frame")});
-    r.renderer.render(gpu,&mut encoder,&view,t);
+    let rendered=if let Some(shared)=&mut group.shared {
+        // A ready output can reuse the most recent group frame for at most
+        // one requested frame interval. Never wait for another output.
+        let refresh=shared.rendered_at.map_or(true,|last|now.saturating_duration_since(last)>=interval);
+        if refresh {
+            group.renderer.render(gpu,&mut encoder,&shared.view,t);
+            shared.rendered_at=Some(now);
+        }
+        shared.present(&mut encoder,&frame.texture,&r.config);
+        refresh
+    } else {
+        let view=frame.texture.create_view(&Default::default());
+        group.renderer.render(gpu,&mut encoder,&view,t);
+        true
+    };
     gpu.queue.submit(Some(encoder.finish()));
     // Request before presentation, so the callback is associated with the next commit.
     // The callback's user data matches the wl_surface's registry id.
@@ -213,21 +368,17 @@ fn draw(gpu:&Gpu,screen:&mut Screen,qh:&QueueHandle<Desktop>,t:f64)->Result<bool
     screen.surface.frame(qh,id);
     screen.ready=false;
     frame.present();
-    r.renderer.profile_submitted();
+    if rendered {group.renderer.profile_submitted();}
     Ok(true)
 }
-fn reload(gpu:&Gpu,state:&mut Desktop,path:&Path)->Result<Scene> {
+fn reload(gpu:&Gpu,pool:&mut RenderPool,path:&Path)->Result<Scene> {
     let scene=Scene::load(path)?;
     let base=path.parent().unwrap_or(Path::new("."));
-    let mut replacements=Vec::new();
-    for (&id,screen) in &state.surfaces {
-        if let Some(r)=&screen.render {
-            let mut new=Renderer::new(gpu,scene.clone(),base,r.config.width,r.config.height,r.config.format)?;
-            new.enable_profile(gpu,format!("surface={id}"));
-            replacements.push((id,new));
-        }
+    let mut replacements=RenderPool::new();
+    for (&key,group) in pool.iter() {
+        replacements.insert(key,new_group(gpu,&scene,base,key,group.shared.is_some())?);
     }
-    for (id,new) in replacements { state.surfaces.get_mut(&id).unwrap().render.as_mut().unwrap().renderer=new; }
+    *pool=replacements;
     Ok(scene)
 }
 fn watch(path:&Path,scene:&Scene)->Result<(mpsc::Receiver<notify::Result<notify::Event>>,notify::RecommendedWatcher)> {
@@ -318,3 +469,25 @@ impl Dispatch<xdg_toplevel::XdgToplevel,u32> for Desktop {
 delegate_noop!(Desktop: ignore wl_compositor::WlCompositor);
 delegate_noop!(Desktop: ignore wl_region::WlRegion);
 delegate_noop!(Desktop: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
+
+#[cfg(test)]
+mod sharing_tests {
+    use super::*;
+    fn config()->wgpu::SurfaceConfiguration {
+        wgpu::SurfaceConfiguration{usage:wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format:wgpu::TextureFormat::Bgra8UnormSrgb,width:1920,height:1080,
+            present_mode:wgpu::PresentMode::Fifo,desired_maximum_frame_latency:2,
+            alpha_mode:wgpu::CompositeAlphaMode::Opaque,view_formats:vec![]}
+    }
+    #[test]
+    fn matching_dimensions_and_format_share_but_other_outputs_do_not() {
+        let a=config();
+        let mut b=a.clone();
+        assert_eq!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
+        assert_ne!(RenderKey::new(&a,1,false),RenderKey::new(&b,2,false));
+        b.format=wgpu::TextureFormat::Rgba8UnormSrgb;
+        assert_ne!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
+        b=a.clone();b.width=1440;b.height=2560;
+        assert_ne!(RenderKey::new(&a,1,true),RenderKey::new(&b,2,true));
+    }
+}
