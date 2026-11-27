@@ -28,7 +28,7 @@ opacity = 0.32
 
 [[layers]]
 name = "distant weapons"
-effects = [{ kind = "custom", shader = "../shaders/material_ground.wgsl", intensity = 0.45, spacing = 85, rotation = -12, color = "#4c3840" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.45, spacing = 85, rotation = -12, color = "#4c3840" }]
 [[layers.shapes]]
 kind = "svg"
 path = "assets/battle_field_distant.svg"
@@ -40,7 +40,7 @@ raster_size = 2048
 
 [[layers]]
 name = "middle weapons"
-effects = [{ kind = "custom", shader = "../shaders/material_ground.wgsl", intensity = 0.55, spacing = 105, rotation = -12, color = "#4c3840" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.55, spacing = 105, rotation = -12, color = "#4c3840" }]
 [[layers.shapes]]
 kind = "svg"
 path = "assets/battle_field_middle.svg"
@@ -52,7 +52,7 @@ raster_size = 2048
 
 [[layers]]
 name = "foreground weapons"
-effects = [{ kind = "custom", shader = "../shaders/material_ground.wgsl", intensity = 0.75, spacing = 135, rotation = -12, color = "#4c3840" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.75, spacing = 135, rotation = -12, color = "#4c3840" }]
 [[layers.shapes]]
 kind = "svg"
 path = "assets/battle_field_foreground.svg"
