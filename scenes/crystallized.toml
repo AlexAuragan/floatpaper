@@ -28,6 +28,158 @@ period = 40
 pulse = 0.65
 
 [[layers]]
+name = "deep rock aperture"
+[[layers.shapes]]
+kind = "svg"
+path = "assets/cave_rim.svg"
+center = [0.5,0.5]
+size = [1.65,0.93]
+color = "#051222"
+raster_size = 1536
+
+[[layers]]
+name = "deep crystal veins"
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.73211,0.55006]
+size = [0.105,0.105]
+color = "#ffffff"
+preserve_color = true
+rotation = -81.000
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.69317,0.68224]
+size = [0.130,0.130]
+color = "#ffffff"
+preserve_color = true
+rotation = -55.286
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.61597,0.77832]
+size = [0.155,0.155]
+color = "#ffffff"
+preserve_color = true
+rotation = -29.571
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.51581,0.81928]
+size = [0.180,0.180]
+color = "#ffffff"
+preserve_color = true
+rotation = -3.857
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.41251,0.79700]
+size = [0.105,0.105]
+color = "#ffffff"
+preserve_color = true
+rotation = 21.857
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.32654,0.71589]
+size = [0.130,0.130]
+color = "#ffffff"
+preserve_color = true
+rotation = 47.571
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.27493,0.59203]
+size = [0.155,0.155]
+color = "#ffffff"
+preserve_color = true
+rotation = 73.286
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.26789,0.44994]
+size = [0.180,0.180]
+color = "#ffffff"
+preserve_color = true
+rotation = 99.000
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.30683,0.31776]
+size = [0.105,0.105]
+color = "#ffffff"
+preserve_color = true
+rotation = 124.714
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.38403,0.22168]
+size = [0.130,0.130]
+color = "#ffffff"
+preserve_color = true
+rotation = 150.429
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.48419,0.18072]
+size = [0.155,0.155]
+color = "#ffffff"
+preserve_color = true
+rotation = 176.143
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.58749,0.20300]
+size = [0.180,0.180]
+color = "#ffffff"
+preserve_color = true
+rotation = 201.857
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.67346,0.28411]
+size = [0.105,0.105]
+color = "#ffffff"
+preserve_color = true
+rotation = 227.571
+raster_size = 320
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster_deep.svg"
+center = [0.72507,0.40797]
+size = [0.130,0.130]
+color = "#ffffff"
+preserve_color = true
+rotation = 253.286
+raster_size = 320
+
+[[layers]]
 name = "distant rock aperture"
 
 [[layers.shapes]]
@@ -35,7 +187,7 @@ kind = "svg"
 path = "assets/cave_rim.svg"
 center = [0.5,0.5]
 size = [2.65,1.49]
-color = "#123557"
+color = "#102b49"
 raster_size = 1536
 
 [[layers]]
@@ -43,178 +195,178 @@ name = "crystal veins"
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.8863220427729952,0.5589153069232462]
 size = [0.18,0.18]
 color = "#ffffff"
 preserve_color = true
 rotation = -82.125
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.8364664105313389,0.7174326705525333]
 size = [0.245,0.245]
 color = "#ffffff"
 preserve_color = true
 rotation = -59.625
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.7353868173618929,0.842847881122264]
 size = [0.31,0.31]
 color = "#ffffff"
 preserve_color = true
 rotation = -37.125
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.5984717150359116,0.9160676097149116]
 size = [0.375,0.375]
 color = "#ffffff"
 preserve_color = true
 rotation = -14.625
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.44656518674403256,0.9259448163907382]
 size = [0.18,0.18]
 color = "#ffffff"
 preserve_color = true
 rotation = 7.875
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.30279362438258606,0.8709757859704506]
 size = [0.245,0.245]
 color = "#ffffff"
 preserve_color = true
 rotation = 30.375
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.18904494502864427,0.7595290550400358]
 size = [0.31,0.31]
 color = "#ffffff"
 preserve_color = true
 rotation = 52.875
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.12263635397949868,0.6085713781165181]
 size = [0.375,0.375]
 color = "#ffffff"
 preserve_color = true
 rotation = 75.375
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.11367795722700486,0.44108469307675385]
 size = [0.18,0.18]
 color = "#ffffff"
 preserve_color = true
 rotation = 97.875
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.16353358946866114,0.28256732944746676]
 size = [0.245,0.245]
 color = "#ffffff"
 preserve_color = true
 rotation = 120.37499999999997
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.26461318263810707,0.157152118877736]
 size = [0.31,0.31]
 color = "#ffffff"
 preserve_color = true
 rotation = 142.875
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.4015282849640881,0.08393239028508837]
 size = [0.375,0.375]
 color = "#ffffff"
 preserve_color = true
 rotation = 165.37499999999997
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.5534348132559674,0.07405518360926178]
 size = [0.18,0.18]
 color = "#ffffff"
 preserve_color = true
 rotation = 187.875
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.6972063756174137,0.1290242140295494]
 size = [0.245,0.245]
 color = "#ffffff"
 preserve_color = true
 rotation = 210.37499999999994
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.8109550549713557,0.24047094495996418]
 size = [0.31,0.31]
 color = "#ffffff"
 preserve_color = true
 rotation = 232.875
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/crystal_cluster.svg"
+path = "assets/crystal_cluster_middle.svg"
 center = [0.8773636460205012,0.39142862188348176]
 size = [0.375,0.375]
 color = "#ffffff"
 preserve_color = true
 rotation = 255.375
-opacity = 0.85
+opacity = 0.92
 raster_size = 384
 
 [[layers]]
@@ -224,8 +376,8 @@ name = "near rock aperture"
 kind = "svg"
 path = "assets/cave_rim.svg"
 center = [0.5,0.5]
-size = [2.2,1.25]
-color = "#081b32"
+size = [3.05,1.72]
+color = "#1b4564"
 raster_size = 1536
 
 [[layers]]
@@ -367,7 +519,7 @@ period = 10
 kind = "svg"
 path = "assets/crystal_diamond.svg"
 center = [0.5,0.5]
-size = [0.25,0.32]
+size = [0.28,0.25]
 color = "#62dfff"
 preserve_color = false
 motion = "drift"
@@ -405,7 +557,7 @@ name = "floating diamond"
 kind = "svg"
 path = "assets/crystal_diamond.svg"
 center = [0.5,0.5]
-size = [0.25,0.32]
+size = [0.28,0.25]
 color = "#ffffff"
 preserve_color = true
 motion = "drift"
