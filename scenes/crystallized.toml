@@ -2,13 +2,13 @@
 fps = 30
 loop_seconds = 120.0
 seed = 152
-background = "#071b39"
+background = "#030710"
 size_reference_aspect = 1.7777778
 effects = [{ kind = "custom", shader = "../shaders/custom_vignette.wgsl", intensity = 0.30 }]
 
 [[layers]]
 name = "blue cavern light"
-background = "#071b39"
+background = "#030710"
 effects = [{ kind = "custom", shader = "../shaders/crystal_light.wgsl", period = 30.0 }]
 [[layers]]
 name = "suspended dust"
@@ -21,7 +21,7 @@ color = "#9beaff"
 count = 75
 spread = [0.48,0.48]
 size_jitter = 0.7
-opacity = 0.45
+opacity = 0.23
 motion = "drift"
 radius = [0.025,0.04]
 period = 40
@@ -173,10 +173,11 @@ raster_size = 320
 name = "deep rock aperture"
 [[layers.shapes]]
 kind = "svg"
-path = "assets/cave_rim.svg"
+path = "assets/cave_rim_deep_textured.svg"
 center = [0.5,0.5]
 size = [1.65,0.93]
-color = "#051222"
+color = "#ffffff"
+preserve_color = true
 raster_size = 1536
 
 [[layers]]
@@ -363,10 +364,11 @@ name = "distant rock aperture"
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/cave_rim.svg"
+path = "assets/cave_rim_middle_textured.svg"
 center = [0.5,0.5]
 size = [2.65,1.49]
-color = "#102b49"
+color = "#ffffff"
+preserve_color = true
 raster_size = 1536
 
 [[layers]]
@@ -497,10 +499,11 @@ name = "near rock aperture"
 
 [[layers.shapes]]
 kind = "svg"
-path = "assets/cave_rim.svg"
+path = "assets/cave_rim_near_textured.svg"
 center = [0.5,0.5]
 size = [3.05,1.72]
-color = "#1b4564"
+color = "#ffffff"
+preserve_color = true
 raster_size = 1536
 
 [[layers]]
@@ -511,7 +514,7 @@ kind = "circle"
 center = [0.5,0.5]
 size = [0.34,0.34]
 color = "#39adf9"
-opacity = 0.08
+opacity = 0.04
 pulse = 0.35
 period = 10
 
