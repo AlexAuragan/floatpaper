@@ -20,9 +20,9 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
     let burst = select(pow(max(0.0, sin(phase)), 12.0), 1.0, GLITCH_CONTINUOUS);
     // Smoothly vary each band's displacement over the existing periodic
     // phase, without resetting the pattern or gating its amplitude.
-    let a = hash(vec2(band, 11.0)) - 0.5;
-    let b = hash(vec2(band, 29.0)) - 0.5;
-    let shift = select(a, mix(a, b, 0.5 - 0.5 * cos(phase)), GLITCH_CONTINUOUS);
+    let shift_a = hash(vec2(band, 11.0)) - 0.5;
+    let shift_b = hash(vec2(band, 29.0)) - 0.5;
+    let shift = select(shift_a, mix(shift_a, shift_b, 0.5 - 0.5 * cos(phase)), GLITCH_CONTINUOUS);
 
     let displacement = (shift)
         * 0.18 * k * burst * params.resolution.x;
