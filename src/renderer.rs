@@ -461,6 +461,63 @@ impl FrameProfiler {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Scissor {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+fn sparse_glitch_eligible(layer: &scene::Layer, clear: wgpu::Color, terminal: bool) -> bool {
+    // Only a transparent geometry layer followed by one fused glitch effect.
+    // Other effects or a nontransparent background may fill the entire screen.
+    terminal && clear.a == 0.0 && layer.effects.len() == 1
+        && layer.effects[0].kind == EffectKind::Glitch
+}
+
+fn glitch_scissor(instances: &[Instance], width: u32, height: u32, strength: f32) -> Option<Scissor> {
+    if instances.is_empty() || width == 0 || height == 0 || !strength.is_finite() {
+        return None;
+    }
+    let w = f64::from(width);
+    let h = f64::from(height);
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for instance in instances {
+        let [x, y, sx, sy] = instance.center_size.map(f64::from);
+        // Extreme coordinates could lose too much precision in the vertex
+        // transform; keep the original full-screen path for those cases.
+        if [x, y, sx, sy].iter().any(|v| !v.is_finite() || v.abs() > 16.0) {
+            return None;
+        }
+        // geometry.wgsl expands the quad by 1.08 before rotation.
+        // The circumradius bounds every rotation and the entire rasterized
+        // quad, including antialiasing. Both axes scale with viewport height.
+        let radius = 1.08 * 0.5 * sx.hypot(sy) * h;
+        min_x = min_x.min(x * w - radius);
+        max_x = max_x.max(x * w + radius);
+        min_y = min_y.min(y * h - radius);
+        max_y = max_y.max(y * h + radius);
+    }
+
+    // glitch.wgsl: absolute band displacement <= 0.09*k*width;
+    // chromatic split <= 0.009*k*width. Bound both axes regardless of
+    // orientation or phase, and include filtering/rasterization slack.
+    let pad = 0.099 * f64::from(strength.clamp(0.0, 1.0)) * w + 4.0;
+    let x0 = (min_x - pad).floor().clamp(0.0, w) as u32;
+    let y0 = (min_y - pad).floor().clamp(0.0, h) as u32;
+    let x1 = (max_x + pad).ceil().clamp(0.0, w) as u32;
+    let y1 = (max_y + pad).ceil().clamp(0.0, h) as u32;
+    // None means full-screen fallback, never an invalid zero-size scissor.
+    if x0 >= x1 || y0 >= y1 || (x0 == 0 && y0 == 0 && x1 == width && y1 == height) {
+        return None;
+    }
+    Some(Scissor { x: x0, y: y0, width: x1 - x0, height: y1 - y0 })
+}
+
 struct EffectPipeline {
     config: Effect,
     passes: Vec<wgpu::RenderPipeline>,
@@ -495,6 +552,7 @@ pub struct Renderer {
     background: wgpu::Color,
     uniform_bytes: Vec<u8>,
     profiler: Option<FrameProfiler>,
+    sparse_glitch: bool,
 }
 
 impl Renderer {
@@ -697,6 +755,7 @@ impl Renderer {
                 background,
                 uniform_bytes: Vec::with_capacity(stride * MAX_PASSES),
                 profiler: None,
+                sparse_glitch: std::env::var_os("FLOATPAPER_DISABLE_SPARSE_GLITCH").is_none(),
             })
         })();
         let validation = pollster::block_on(d.pop_error_scope());
@@ -892,8 +951,17 @@ impl Renderer {
                 };
                 if let Some(last) = terminal {
                     let (strength, phase) = scene::effect_values(&last.config, t, self.scene.loop_seconds);
-                    passes.draw(
-                        composite_effect_label(last.config.kind),
+                    let scissor = if self.sparse_glitch && prefix.is_none()
+                        && sparse_glitch_eligible(&self.scene.layers[i], layer.clear, last.terminal)
+                    {
+                        let over = &ranges[i].0;
+                        glitch_scissor(&flat[over.start as usize..over.end as usize],
+                            self.width, self.height, strength)
+                    } else {
+                        None
+                    };
+                    passes.draw_region(
+                        if scissor.is_some() { "glitch_composite_sparse" } else { composite_effect_label(last.config.kind) },
                         &last.passes[0],
                         current,
                         destination,
@@ -904,6 +972,7 @@ impl Renderer {
                         last.config.rotation.unwrap_or(0.0),
                         last.config.spacing,
                         scene::parse_color(&last.config.color).expect("validated effect color"),
+                        scissor,
                     );
                 } else {
                     passes.draw(
@@ -1050,6 +1119,25 @@ impl Passes<'_> {
         effect_spacing: f32,
         effect_color: [f32; 4],
     ) {
+        self.draw_region(label, pipeline, input, output, load, strength, phase,
+            effect_offset, effect_rotation, effect_spacing, effect_color, None);
+    }
+
+    fn draw_region(
+        &mut self,
+        label: &'static str,
+        pipeline: &wgpu::RenderPipeline,
+        input: &Target,
+        output: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+        strength: f32,
+        phase: f32,
+        effect_offset: [f32; 2],
+        effect_rotation: f32,
+        effect_spacing: f32,
+        effect_color: [f32; 4],
+        scissor: Option<Scissor>,
+    ) {
         let offset = self.bytes.len();
 
         assert!(offset / self.stride < MAX_PASSES);
@@ -1070,6 +1158,9 @@ impl Passes<'_> {
             .copy_from_slice(bytemuck::bytes_of(&u));
 
         let mut pass = self.begin(output, load, label);
+        if let Some(rect) = scissor {
+            pass.set_scissor_rect(rect.x, rect.y, rect.width, rect.height);
+        }
 
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &input.bind, &[offset as u32]);
@@ -1471,6 +1562,39 @@ effects = [{kind = "crt"}]
             assert!(body.contains(&format!("return layer_effect(uv) * {opacity:?};")));
             assert_eq!(body.matches("fn effect(").count(), 1);
         }
+    }
+
+
+    #[test]
+    fn sparse_glitch_bounds_include_rotation_filtering_and_max_displacement() {
+        let shape = Instance {
+            center_size: [0.5, 0.5, 0.1, 0.1],
+            color: [1.0; 4],
+            params: [0.7853982, 1.0, 4.0, 0.0],
+        };
+        let rect = glitch_scissor(&[shape], 1000, 1000, 1.0).unwrap();
+        // Radius ~76.4 px, displacement/split 99 px, margin 4 px.
+        assert_eq!(rect, Scissor { x: 320, y: 320, width: 360, height: 360 });
+        let weak = glitch_scissor(&[shape], 1000, 1000, 0.0).unwrap();
+        assert!(weak.width < rect.width);
+        let mut edge = shape;
+        edge.center_size[0] = 0.0;
+        let clipped = glitch_scissor(&[edge], 1000, 1000, 1.0).unwrap();
+        assert_eq!(clipped.x, 0);
+        assert!(clipped.width >= 180);
+        assert_eq!(glitch_scissor(&[], 1000, 1000, 1.0), None);
+    }
+
+    #[test]
+    fn sparse_glitch_rejects_opaque_or_multi_effect_layers() {
+        let mut s = sample_scene();
+        let transparent = wgpu::Color::TRANSPARENT;
+        assert!(sparse_glitch_eligible(&s.layers[3], transparent, true));
+        assert!(!sparse_glitch_eligible(&s.layers[3], wgpu::Color::BLACK, true));
+        assert!(!sparse_glitch_eligible(&s.layers[3], transparent, false));
+        let grid = s.layers[1].effects[0].clone();
+        s.layers[3].effects.insert(0, grid);
+        assert!(!sparse_glitch_eligible(&s.layers[3], transparent, true));
     }
 
 }
