@@ -20,9 +20,9 @@ Install the Vulkan driver for your GPU (e.g. `vulkan-radeon` or `vulkan-intel`) 
 ## Run
 
 ```sh
-floatpaper preview scenes/spaceship_loading.toml
-floatpaper live scenes/spaceship_loading.toml
-floatpaper live scenes/spaceship_loading.toml --output DP-1
+floatpaper preview scenes/spaceship.toml
+floatpaper live scenes/spaceship.toml
+floatpaper live scenes/spaceship.toml --output DP-1
 ```
 
 Edit the scene while running to hot-reload it. Use `floatpaper pause`, `resume`, `toggle` or `status` to control a live wallpaper.
@@ -38,8 +38,6 @@ Edit the scene while running to hot-reload it. Use `floatpaper pause`, `resume`,
 | [pure_black_reactive](scenes/pure_black_reactive.toml) | Kick-driven glitch and bass-driven motion/rotation |
 | [spaceship](scenes/spaceship.toml) | Standalone sci-fi flight HUD; suitable for video export |
 | [spaceship_reactive](scenes/spaceship_reactive.toml) | Live ASCII telemetry, output volume and reactive orbital glow |
-| [spaceship_loading](scenes/spaceship_loading.toml) | SVG, rays, anchors and HUD |
-| [spaceship_telemetry](scenes/spaceship_telemetry.toml) | Responsive HUD, text sequences and live metrics |
 | [audio_reactive](scenes/audio_reactive.toml) | Audio-driven glow, glitch, rotation and spectrum |
 
 For the new reactive spacecraft, install `wireplumber` for `wpctl` (PipeWire output volume) and `libpulse` for audio capture:
@@ -51,13 +49,6 @@ floatpaper live scenes/spaceship_reactive.toml
 ```
 
 The standalone `spaceship.toml` requires no command trust or audio capture and can be exported to MP4 for playback on other platforms. Floatpaper itself remains a Wayland application.
-
-For the original live telemetry example:
-
-```sh
-floatpaper trust scenes/spaceship_telemetry.toml
-floatpaper live scenes/spaceship_telemetry.toml
-```
 
 **Only trust scenes and scripts you have reviewed.** Commands run with your user permissions. Trust is stored per canonical scene path and exact command names/arguments; changed declarations require reauthorization. Scripts and programs invoked by an approved command are not pinned or sandboxed. Use `floatpaper untrust <scene>` to revoke approval, then restart or reload the running scene. Without trust, command text uses defaults.
 
