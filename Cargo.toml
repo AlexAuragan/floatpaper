@@ -25,6 +25,7 @@ calloop = "0.13"
 calloop-wayland-source = "0.3"
 notify = "6.1"
 ctrlc = "3.4"
+libc = "0.2"
 
 [profile.release]
 lto = "thin"
