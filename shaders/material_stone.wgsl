@@ -22,8 +22,8 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
     let slope = stone_height(p + light_dir * 0.075) - h;
     let grain = stone_noise(p * 19.0 + vec2(37.0));
     let bands = stone_noise(rotate_point(p, 0.37) * vec2(0.45, 3.6));
-    let material = clamp(0.77 + (h - 0.5) * 1.15 + slope * 2.1
-        + (grain - 0.5) * 0.13 + (bands - 0.5) * 0.23, 0.30, 1.35);
+    let material = clamp(0.90 + (h - 0.5) * 0.80 + slope * 1.35
+        + (grain - 0.5) * 0.13 + (bands - 0.5) * 0.08, 0.55, 1.32);
     let aspect = params.resolution.x / params.resolution.y;
     let distance_to_light = length((uv - vec2(0.5) - params.offset / params.resolution) * vec2(aspect, 1.0));
     let bounce = exp(-distance_to_light * 3.8) * 0.10 * k;
