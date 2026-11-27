@@ -1,0 +1,94 @@
+# Circles of Death — original snowy battlefield, no live integrations.
+fps = 30
+loop_seconds = 120.0
+seed = 671
+background = "#14090d"
+effects = [{ kind = "custom", shader = "../shaders/snow_1.wgsl", intensity = 0.65, spacing = 48, rotation = -18, color = "#999093", period = 24.0 }, { kind = "custom", shader = "../shaders/custom_vignette.wgsl", intensity = 0.32 }]
+
+[[layers]]
+name = "crimson atmosphere"
+background = "#14090d"
+effects = [{ kind = "custom", shader = "../shaders/battle_sky.wgsl", period = 120.0 }]
+[[layers]]
+name = "eclipsed sun"
+effects = [{ kind = "blur", intensity = 10.0 }]
+[[layers.shapes]]
+kind = "circle"
+center = [0.28,0.4]
+size = [0.25,0.25]
+color = "#7e333c"
+opacity = 0.24
+
+[[layers.shapes]]
+kind = "circle"
+center = [0.28,0.4]
+size = [0.2,0.2]
+color = "#a34b50"
+opacity = 0.32
+
+[[layers]]
+name = "distant weapons"
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.45, spacing = 85, rotation = -12, color = "#68505a" }]
+[[layers.shapes]]
+kind = "svg"
+path = "assets/battle_field_distant.svg"
+center = [0.5, 0.69]
+size = [3.0, 0.675]
+color = "#ffffff"
+preserve_color = true
+raster_size = 2048
+
+[[layers]]
+name = "middle weapons"
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.55, spacing = 105, rotation = -12, color = "#68505a" }]
+[[layers.shapes]]
+kind = "svg"
+path = "assets/battle_field_middle.svg"
+center = [0.5, 0.69]
+size = [3.0, 0.675]
+color = "#ffffff"
+preserve_color = true
+raster_size = 2048
+
+[[layers]]
+name = "foreground weapons"
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_ground.wgsl", intensity = 0.75, spacing = 135, rotation = -12, color = "#68505a" }]
+[[layers.shapes]]
+kind = "svg"
+path = "assets/battle_field_foreground.svg"
+center = [0.5, 0.69]
+size = [3.0, 0.675]
+color = "#ffffff"
+preserve_color = true
+raster_size = 2048
+
+[[layers]]
+name = "abandoned machine"
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/battle_gear_weathered.svg"
+center = [1.0,1.0]
+size = [0.82,0.82]
+color = "#ffffff"
+preserve_color = true
+spin = 0.0083333333
+raster_size = 768
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/battle_gear.svg"
+center = [1.0,1.0]
+size = [0.74,0.74]
+color = "#100b10"
+spin = 0.0083333333
+opacity = 0.32
+raster_size = 512
+
+[[layers.shapes]]
+kind = "circle"
+center = [1.0,1.0]
+size = [0.20,0.20]
+color = "#080609"
+outline = 0.16
+

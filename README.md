@@ -31,6 +31,8 @@ Edit the scene while running to hot-reload it. Use `floatpaper pause`, `resume`,
 
 | Scene | Demonstrates |
 |---|---|
+| [circles_of_death](scenes/circles_of_death.toml) | Crimson battlefield, rotating cog and procedural snowfall |
+| [crystallized](scenes/crystallized.toml) | Layered crystal cavern, procedural materials and floating diamond emblem |
 | [minimal](scenes/minimal.toml) | Basic shapes and animation |
 | [pure_black](scenes/pure_black.toml) | Layered effects |
 | [cutout](scenes/cutout.toml) | Cutouts, grids and glitch |
@@ -77,6 +79,7 @@ MP4 cannot display live command output or audio reactivity; export warns and use
 ## Documentation
 
 - [Scene format, shaders, runtime controls and performance options](docs/REFERENCE.md)
+- [Shader library, variant previews and technique references](docs/SHADERS.md)
 - `floatpaper --help` and `floatpaper <command> --help`
 
 License: [MIT](LICENSE).

@@ -1,0 +1,42 @@
+# Shader lab — replace the global effect with any library shader.
+fps = 30
+loop_seconds = 48.0
+seed = 302
+background = "#10131d"
+effects = [{ kind = "custom", shader = "../shaders/chromatic_aberration_1.wgsl", intensity = 0.8, spacing = 48, period = 8, rotation = -18, color = "#ffffff" }]
+
+[[layers]]
+name = "contrast target"
+[[layers.shapes]]
+kind = "circle"
+center = [0.5,0.5]
+size = [0.65,0.65]
+outline = 0.008
+color = "#c8d9f2"
+[[layers.shapes]]
+kind = "triangle"
+center = [0.5,0.5]
+size = [0.44,0.44]
+outline = 0.025
+color = "#e0e8fa"
+spin = 0.0208333333333
+[[layers.shapes]]
+kind = "rectangle"
+center = [0.5,0.5]
+size = [0.25,0.25]
+color = "#465f91"
+rotation = 45
+[[layers.shapes]]
+kind = "circle"
+center = [0.5,0.5]
+size = [0.10,0.10]
+color = "#e5ad86"
+[[layers.shapes]]
+kind = "rectangle"
+center = [0.5,0.5]
+size = [0.018,0.11]
+color = "#92bde0"
+count = 48
+spread = [0.46,0.38]
+size_jitter = 0.8
+opacity = 0.5

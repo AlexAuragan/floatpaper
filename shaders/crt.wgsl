@@ -21,7 +21,7 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
 
     let scan = 1.0 - 0.32 * k * (
         0.5 + 0.5 * cos(
-            6.2831853 * scan_position / 3.0
+            6.2831853 * scan_position / max(params.spacing, 1.0)
         )
     );
 

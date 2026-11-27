@@ -300,6 +300,9 @@ fn raster_size_default() -> u32 { 1024 }
 #[serde(deny_unknown_fields)]
 pub struct Effect {
     pub kind: EffectKind,
+    /// Author guarantees the custom shader is independent of time and audio.
+    #[serde(default, rename = "static")]
+    pub static_shader: bool,
     #[serde(default = "default_true")]
     pub continuous: bool,
     #[serde(default)]
@@ -316,11 +319,17 @@ pub struct Effect {
     pub offset: [f32; 2],
     #[serde(default, alias = "orientation")]
     pub rotation: Option<f32>,
-    #[serde(default = "spacing_default")]
-    pub spacing: f32,
+    #[serde(default)]
+    pub spacing: Option<f32>,
     #[serde(default = "effect_color_default")]
     pub color: String,
     #[serde(default)] pub audio: Option<EffectAudio>,
+}
+
+impl Effect {
+    pub fn effective_spacing(&self) -> f32 {
+        self.spacing.unwrap_or_else(|| if self.kind == EffectKind::Crt { 3.0 } else { spacing_default() })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -779,6 +788,10 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
         if let Some(a) = &e.audio { a.response().validate()?; if !(-100.0..=100.0).contains(&a.intensity) { bail!("Audio effect intensity must be -100..=100"); } }
         positive(e.period, "effect.period")?;
         unit(e.pulse, "effect.pulse")?;
+        if e.static_shader {
+            if e.kind != EffectKind::Custom { bail!("static is only valid for custom effects"); }
+            if e.pulse != 0.0 || e.audio.is_some() { bail!("Static custom effects cannot use pulse or audio modulation"); }
+        }
         match (&e.kind, &e.shader) {
             (EffectKind::Custom, Some(p)) => {
                 fs::read_to_string(base.join(p))
@@ -796,7 +809,7 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
                 bail!("Effect rotation must be finite");
             }
         }
-        if !e.spacing.is_finite() || e.spacing <= 0.0 {
+        if !e.effective_spacing().is_finite() || e.effective_spacing() <= 0.0 {
             bail!("Effect spacing must be > 0");
         }
 
@@ -807,7 +820,7 @@ fn validate_effects(effects: &[Effect], base: &Path) -> Result<()> {
             if e.rotation.is_some() && e.kind == EffectKind::Noise { eprintln!("Warning: noise ignores rotation"); }
             if e.kind != EffectKind::Grid {
                 if e.offset != [0.0, 0.0] { eprintln!("Warning: {:?} ignores offset", e.kind); }
-                if e.spacing != spacing_default() { eprintln!("Warning: {:?} ignores spacing", e.kind); }
+                if e.kind != EffectKind::Crt && e.spacing.is_some_and(|s| s != spacing_default()) { eprintln!("Warning: {:?} ignores spacing", e.kind); }
                 if e.color != effect_color_default() { eprintln!("Warning: {:?} ignores color", e.kind); }
             }
         }
@@ -839,6 +852,38 @@ pub fn parse_color(s: &str) -> Result<[f32; 4]> {
 mod tests {
     use super::*;
     #[test]
+    fn effect_spacing_defaults_and_explicit_crt_spacing() {
+        for (kind, default) in [("crt", 3.0), ("grid", 48.0), ("custom", 48.0)] {
+            let e: Effect = toml::from_str(&format!("kind = \"{kind}\"")).unwrap();
+            assert_eq!(e.effective_spacing(), default);
+        }
+        for spacing in [6.0, 48.0] {
+            let e: Effect = toml::from_str(&format!("kind = \"crt\"\nspacing = {spacing}")).unwrap();
+            assert_eq!(e.effective_spacing(), spacing);
+            assert!(validate_effects(&[e], Path::new(".")).is_ok());
+        }
+    }
+    #[test]
+    fn static_custom_effect_validation() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenes");
+        let valid: Effect = toml::from_str(r#"
+kind = "custom"
+shader = "../shaders/material_stone.wgsl"
+static = true
+"#).unwrap();
+        assert!(valid.static_shader);
+        assert!(validate_effects(&[valid.clone()], &base).is_ok());
+        let mut invalid = valid.clone();
+        invalid.pulse = 0.1;
+        assert!(validate_effects(&[invalid], &base).is_err());
+        let mut invalid = valid;
+        invalid.kind = EffectKind::Grid;
+        invalid.shader = None;
+        assert!(validate_effects(&[invalid], &base).is_err());
+        let ordinary: Effect = toml::from_str("kind = \"custom\"").unwrap();
+        assert!(!ordinary.static_shader);
+    }
+    #[test]
     fn colors_are_linear() {
         assert!((parse_color("#80808080").unwrap()[0] - 0.21586).abs() < 0.0001);
         assert!(parse_color("#ééé").is_err());
@@ -852,7 +897,7 @@ mod tests {
     #[test]
     fn example_scenes_validate() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml"] {
+        for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "audio_reactive.toml", "spaceship.toml", "spaceship_reactive.toml", "cutout_reactive.toml", "pure_black_reactive.toml", "circles_of_death.toml", "crystallized.toml", "shader_lab_glitch_1.toml", "shader_lab_glitch_2.toml", "shader_lab_snow_1.toml", "shader_lab_fog_1.toml", "shader_lab_film_grain_1.toml", "shader_lab_chromatic_aberration_1.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
     }

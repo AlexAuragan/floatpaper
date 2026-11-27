@@ -138,7 +138,7 @@ Effects run in order. `intensity` is effect-specific; `period` is the animation 
 | `grid` | 0..1 | Rotatable pixel-space grid |
 | `custom` | shader-defined | Load a WGSL effect body from a file |
 
-Effect arguments: all effects accept `intensity`, `period`, and `pulse`; period has no visible effect on static effects unless pulse is nonzero. `rotation` is used by blur, CRT, glitch and grid (blur is two-pass when omitted, one-pass when supplied). `spacing`, `offset`, and `color` are grid-specific; custom effects can use any shared uniform. Noise ignores rotation. Unsupported non-default arguments produce warnings.
+Effect arguments: all effects accept `intensity`, `period`, and `pulse`; period has no visible effect on static effects unless pulse is nonzero. `rotation` is used by blur, CRT, glitch and grid (blur is two-pass when omitted, one-pass when supplied). `spacing` sets the CRT scanline pitch in physical pixels (default 3; values below 1 are clamped to 1 in the shader), or grid spacing (default 48). `offset` and `color` are grid-specific; custom effects can use any shared uniform. Noise ignores rotation. Unsupported non-default arguments produce warnings.
 
 For an individual shape effect, give that shape its own layer. Effects process the entire layer texture, including transparency. This version has no keyframe editor or scripting runtime.
 
@@ -153,6 +153,20 @@ effects = [{ kind = "custom", shader = "../shaders/custom_vignette.wgsl", intens
 Paths are relative to the scene TOML file. A custom shader defines `fn effect(uv: vec2<f32>) -> vec4<f32>`; `shaders/common.wgsl` is prepended automatically. The provided `sample_source(uv)` samples the input texture; `params.resolution`, `params.phase`, `params.strength`, `params.loop_phase`, `params.time`, `params.rotation` (degrees), `params.spacing` (pixels), `params.offset` (pixels), and `params.color` (linear straight RGBA) are available. UV origin is top-left. Inputs/outputs are **linear premultiplied RGBA**. Keep RGB at zero for fully transparent pixels. For seamless effects, use cyclic `phase` or sine/cosine of `loop_phase` rather than using `time` directly. Custom effects are responsible for their own periodicity.
 
 During preview or live mode, the scene directory and initially referenced external shader directories are watched. Edits are debounced; a malformed config or shader should be rejected with diagnostics and the previous scene retained. The scene clock keeps running across reloads. Built-in WGSL files are embedded at compile time; copy one into a custom shader if you want to edit it live, or rebuild after editing built-ins. Adding a reference to a new external shader directory requires a restart for that directory to be watched. The watcher may react to unrelated file changes in watched directories; keep exports outside them where practical.
+
+### Procedural materials
+
+The `scenes/crystallized.toml` example layers custom shaders on top of existing SVG geometry. No additional material syntax is needed.
+
+| Shader | Parameters |
+|---|---|
+| `material_stone.wgsl` | intensity = contrast (0..1), spacing = coarse grain size (pixels), rotation = light direction (degrees), color = reflected light tint, offset = light-center offset (pixels) |
+| `material_ground.wgsl` | intensity = soil contrast (0..1), spacing = coarse texture scale (pixels), rotation = wind direction (degrees), color = dust tint; luminance mask separates soil from subtle weathered metal shading |
+| `material_crystal.wgsl` | intensity = optical shading strength (0..1), spacing = optical variation scale (pixels), rotation = light direction (degrees), color = reflected light tint; preserves facet colors and alpha |
+| `material_contact_shadow.wgsl` | intensity = shadow amount (0..1), spacing = sample radius (pixels), rotation = direction (degrees); darkens the inside of alpha-mask edges, not other layers |
+| `material_atmosphere.wgsl` | intensity = haze opacity (0..1), spacing = cloud scale (pixels), color = tint, period = drift cycle (seconds) |
+
+Stone, crystal and edge-occlusion shaders preserve alpha. They operate in screen space, rather than object-local coordinates, and are best suited to static layers. The material layers in Crystallized and Circles of Death declare `static = true` so their static geometry and effects can be cached together. Atmosphere, animated backgrounds and global effects still run every frame.
 
 ## Audio reactivity
 
@@ -247,9 +261,9 @@ Built-in shape animations and text sequences are pure functions of scene time an
 
 ## Static rendering caches
 
-Floatpaper automatically caches one contiguous run of fully static layers and, when useful, one static geometry/effect prefix in a partially animated layer. A prefix ends before the first time-dependent effect; subsequent effects run every frame. Only built-in grid, blur and CRT with no intensity pulse are considered static. Animated geometry, audio-reactive shapes/effects, spectrum shapes, text sources, noise, glitch and custom shaders are excluded conservatively.
+Floatpaper automatically caches one contiguous run of fully static layers and, when useful, one static geometry/effect prefix in a partially animated layer. A prefix ends before the first time-dependent effect; subsequent effects run every frame. Built-in grid, blur and CRT and custom effects explicitly declaring `static = true` are eligible when pulse is zero and audio modulation is absent. Animated geometry, audio-reactive shapes/effects, spectrum shapes, text sources, noise, glitch and unmarked custom shaders remain excluded. The declaration is an author contract: the shader must not depend on `params.phase`, `params.loop_phase`, `params.time` or any audio uniform (directly or indirectly). The engine does not analyze WGSL dependencies. Static declarations on non-custom effects or with pulse/audio modulation are rejected. A static shader processing animated input still runs every frame; global effects are not cached.
 
-The prefix texture is populated once with an exact GPU-side texture copy, then sampled directly by the dynamic suffix. Both caches are rebuilt on resize or scene reload. The combined extra texture storage is limited to 64 MiB per output; if only one cache fits, the existing static layer cache takes priority.
+The prefix texture is populated once with an exact GPU-side texture copy, then sampled directly by the dynamic suffix. Both caches are rebuilt on resize or scene reload, and invalidated when pixel scale changes. The combined extra texture storage is limited to 64 MiB per output; if only one cache fits, the existing static layer cache takes priority.
 
 Set `FLOATPAPER_DISABLE_PREFIX_CACHE=1` to disable just prefix caching, or `FLOATPAPER_DISABLE_CACHE=1` to disable both. These are startup options and do not change scene files.
 
