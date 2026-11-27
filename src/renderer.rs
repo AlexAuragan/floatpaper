@@ -464,6 +464,7 @@ impl FrameProfiler {
 struct EffectPipeline {
     config: Effect,
     passes: Vec<wgpu::RenderPipeline>,
+    to_output: bool,
 }
 struct LayerPipeline {
     effects: Vec<EffectPipeline>,
@@ -641,12 +642,17 @@ impl Renderer {
                 .iter()
                 .map(|l| {
                     Ok(LayerPipeline {
-                        effects: compile_effects(d, &layout, &l.effects, base)?,
+                        effects: compile_effects(d, &layout, &l.effects, base, None)?,
                         clear: clear_color(&l.background)?,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let global = compile_effects(d, &layout, &scene.effects, base)?;
+            let final_output = if std::env::var_os("FLOATPAPER_DISABLE_FINAL_FUSION").is_some() {
+                None
+            } else {
+                Some(output_format)
+            };
+            let global = compile_effects(d, &layout, &scene.effects, base, final_output)?;
             let background = clear_color(&scene.background)?;
             let instance_capacity = (scene.shape_count() * 3).max(1);
             let instances = d.create_buffer(&wgpu::BufferDescriptor {
@@ -912,31 +918,56 @@ impl Renderer {
         if let Some(cache) = &mut self.prefix_cache {
             cache.valid = true;
         }
-        let current = passes.chain(
-            &self.targets[2],
-            &self.targets[2],
-            &self.targets[3],
-            &self.global,
-            t,
-            self.scene.loop_seconds,
-        );
-        passes.draw(
-            "present",
-            &self.present,
-            current,
-            output,
-            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-            if self.output_format.is_srgb() {
-                0.0
-            } else {
-                1.0
-            },
-            0.0,
-            [0.0; 2],
-            0.0,
-            48.0,
-            [0.0, 0.0, 0.0, 1.0],
-        );
+        if let Some((last, prefix)) = self.global.split_last().filter(|(last, _)| last.to_output) {
+            let current = passes.chain(
+                &self.targets[2],
+                &self.targets[2],
+                &self.targets[3],
+                prefix,
+                t,
+                self.scene.loop_seconds,
+            );
+            let (strength, phase) = scene::effect_values(&last.config, t, self.scene.loop_seconds);
+            passes.draw(
+                fused_effect_label(last.config.kind),
+                &last.passes[0],
+                current,
+                output,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                strength,
+                phase,
+                last.config.offset,
+                last.config.rotation.unwrap_or(0.0),
+                last.config.spacing,
+                scene::parse_color(&last.config.color).expect("validated effect color"),
+            );
+        } else {
+            let current = passes.chain(
+                &self.targets[2],
+                &self.targets[2],
+                &self.targets[3],
+                &self.global,
+                t,
+                self.scene.loop_seconds,
+            );
+            passes.draw(
+                "present",
+                &self.present,
+                current,
+                output,
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                if self.output_format.is_srgb() {
+                    0.0
+                } else {
+                    1.0
+                },
+                0.0,
+                [0.0; 2],
+                0.0,
+                48.0,
+                [0.0, 0.0, 0.0, 1.0],
+            );
+        }
         if let Some(profiler) = passes.profiler.as_deref_mut() {
             profiler.finish(passes.encoder);
         }
@@ -1087,15 +1118,47 @@ fn clear_color(s: &str) -> Result<wgpu::Color> {
         a: c[3] as f64,
     })
 }
+// Fuse only a known single-pass built-in. Custom shader bodies retain
+// their original compilation and execution path, as do two-pass blurs.
+fn final_effect_eligible(effect: &Effect) -> bool {
+    effect.kind != EffectKind::Custom && effect_pass_count(effect) == 1
+}
+
+fn fused_effect_label(kind: EffectKind) -> &'static str {
+    match kind {
+        EffectKind::Noise => "noise_present",
+        EffectKind::Crt => "crt_present",
+        EffectKind::Glitch => "glitch_present",
+        EffectKind::Blur => "blur_present",
+        EffectKind::Grid => "grid_present",
+        EffectKind::Custom => unreachable!("custom effects are not fused"),
+    }
+}
+
+fn fused_effect_body(body: &str, format: wgpu::TextureFormat) -> String {
+    let effect = body.replacen("fn effect(", "fn final_effect(", 1);
+    let (present_helper, _) = include_str!("../shaders/present.wgsl")
+        .split_once("fn effect(")
+        .expect("built-in presentation shader must define effect");
+    // Bake the format choice into the shader instead of overloading strength:
+    // the final effect still needs its real intensity parameter.
+    let rgb = if format.is_srgb() { "c.rgb" } else { "linear_to_srgb(c.rgb)" };
+    format!(
+        "{effect}\n{present_helper}\nfn effect(uv: vec2<f32>) -> vec4<f32> {{\n    let c = final_effect(uv);\n    return vec4<f32>({rgb}, 1.0);\n}}"
+    )
+}
+
 fn compile_effects(
     d: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     effects: &[Effect],
     base: &Path,
+    final_output: Option<wgpu::TextureFormat>,
 ) -> Result<Vec<EffectPipeline>> {
     effects
         .iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(index, e)| {
             let bodies: Vec<(&str, Cow<'_, str>)> = match e.kind {
                 EffectKind::Noise => vec![(
                     "noise",
@@ -1129,12 +1192,25 @@ fn compile_effects(
                     )]
                 }
             };
+            if let Some(format) = final_output.filter(|_| {
+                index + 1 == effects.len() && final_effect_eligible(e) && bodies.len() == 1
+            }) {
+                let body = fused_effect_body(&bodies[0].1, format);
+                let label = fused_effect_label(e.kind);
+                eprintln!("Final effect fusion: {label}");
+                return Ok(EffectPipeline {
+                    config: e.clone(),
+                    passes: vec![effect_pipeline(d, layout, label, &body, format, None)],
+                    to_output: true,
+                });
+            }
             Ok(EffectPipeline {
                 config: e.clone(),
                 passes: bodies
                     .iter()
                     .map(|(label, body)| effect_pipeline(d, layout, label, body, INTERNAL, None))
                     .collect(),
+                to_output: false,
             })
         })
         .collect()
@@ -1295,6 +1371,30 @@ effects = [{kind = "crt"}]
         assert!(cache_fits(1440, 2560, 2));
         assert!(cache_fits(3840, 2160, 1));
         assert!(!cache_fits(3840, 2160, 2));
+    }
+
+
+    #[test]
+    fn final_fusion_only_accepts_single_pass_builtin_effects() {
+        let s = sample_scene();
+        let mut blur = s.layers[2].effects[0].clone();
+        assert!(!final_effect_eligible(&blur));
+        blur.rotation = Some(45.0);
+        assert!(final_effect_eligible(&blur));
+        assert!(final_effect_eligible(&s.layers[4].effects[0]));
+        blur.kind = EffectKind::Custom;
+        assert!(!final_effect_eligible(&blur));
+    }
+
+    #[test]
+    fn fused_shader_preserves_effect_and_selects_output_conversion() {
+        let crt = include_str!("../shaders/crt.wgsl");
+        let srgb = fused_effect_body(crt, wgpu::TextureFormat::Bgra8UnormSrgb);
+        assert!(srgb.contains("fn final_effect("));
+        assert!(srgb.contains("return vec4<f32>(c.rgb, 1.0);"));
+        assert_eq!(srgb.matches("fn effect(").count(), 1);
+        let linear = fused_effect_body(crt, wgpu::TextureFormat::Bgra8Unorm);
+        assert!(linear.contains("return vec4<f32>(linear_to_srgb(c.rgb), 1.0);"));
     }
 
 }
