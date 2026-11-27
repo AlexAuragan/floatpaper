@@ -5,15 +5,15 @@ export LC_ALL=C
 panel() {
     local title=$1 row
     shift
-    printf '+- %s ' "$title"
-    printf '%*s' "$((26-${#title}))" '' | tr ' ' '-'
-    printf '+\n'
-    for row in "$@"; do printf '| %-27.27s |\n' "$row"; done
-    printf '+-----------------------------+\n'
+    # Monospace fixed-width canvas. Padding is ASCII; the decorative glyphs
+    # are literal UTF-8, so the C locale cannot truncate them mid-byte.
+    printf '┌─ %s\n' "$title"
+    for row in "$@"; do printf '  %s\n' "$row"; done
+    printf '└──────────────────────────\n'
 }
 case "${1:-}" in
     nav)
-        panel 'NAV / FLIGHT 01' 'MODE    : CRUISE' 'VECTOR  : 125.04 DEG' 'TRACK   : AUTO' "CLOCK   : $(date '+%H:%M:%S')"
+        panel '01 / NAVIGATION' 'CRUISE         AUTO' 'HDG         125.04°' "UTC        $(date -u '+%H:%M:%S')"
         ;;
     core)
         cpu=-- gpu=-- temp=--
@@ -26,29 +26,27 @@ case "${1:-}" in
                 esac
             done <<< "$data"
         fi
-        printf -v cpurow 'CPU BUS : %3s%%' "$cpu"
-        printf -v gpurow 'GPU BUS : %3s%%' "$gpu"
-        printf -v temprow 'THERMAL : %3s C' "$temp"
-        status='STATUS  : ONLINE'
-        if [[ "$cpu" == -- || "$gpu" == -- || "$temp" == -- ]]; then status='STATUS  : PARTIAL'; fi
-        panel 'CORE / TELEMETRY' "$cpurow" "$gpurow" "$temprow" "$status"
+        printf -v cpurow 'CPU            %3s%%' "$cpu"
+        printf -v gpurow 'GPU            %3s%%' "$gpu"
+        printf -v temprow 'THERMAL       %3s C' "$temp"
+        panel '02 / SYSTEMS' "$cpurow" "$gpurow" "$temprow"
         ;;
     uplink)
-        gain=-- filled=0 status='STATUS  : NO SIGNAL'
+        gain=-- filled=0 status='NO SIGNAL'
         if command -v wpctl >/dev/null && raw=$(wpctl get-volume @DEFAULT_AUDIO_SINK@); then
             if gain=$(awk '$1=="Volume:" && $2 ~ /^[0-9]+([.][0-9]+)?$/ { printf "%d", $2*100+0.5; ok=1 } END { if (!ok) exit 1 }' <<< "$raw"); then
-                filled=$(( (gain+2)/5 ))
-                ((filled <= 20)) || filled=20
-                status='STATUS  : ONLINE'
-                if [[ "$raw" == *"[MUTED]"* ]]; then status='STATUS  : MUTED'; filled=0; fi
+                filled=$(( (gain*14+50)/100 ))
+                ((filled <= 14)) || filled=14
+                status='ONLINE'
+                if [[ "$raw" == *"[MUTED]"* ]]; then status='MUTED'; filled=0; fi
             else gain=--; fi
         fi
-        printf -v gainrow 'GAIN    : %3s%%' "$gain"
+        printf -v gainrow 'OUTPUT         %3s%%' "$gain"
         printf -v bar '%*s' "$filled" ''
-        bar=${bar// /#}
-        printf -v empty '%*s' "$((20-filled))" ''
-        empty=${empty// /-}
-        panel 'COMMS / UPLINK' 'CHANNEL : 01' "$gainrow" "[$bar$empty]" "$status"
+        bar=${bar// /▰}
+        printf -v empty '%*s' "$((14-filled))" ''
+        empty=${empty// /░}
+        panel '03 / AUDIO LINK' "$gainrow" "$bar$empty" "$status"
         ;;
     *) printf 'Usage: %s {nav|core|uplink}\n' "$0" >&2; exit 2 ;;
 esac
