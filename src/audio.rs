@@ -262,12 +262,13 @@ fn capture(target: Option<&str>, sensitivity: f32, running: &AtomicBool, output:
                     for (sample, chunk) in samples.iter_mut().zip(bytes.chunks_exact(4)) {
                         *sample = f32::from_le_bytes(chunk.try_into().expect("four bytes"));
                     }
-                    *output.lock().expect("audio mutex poisoned") = analyzer.process(&samples);
+                    let signals = analyzer.process(&samples);
+                    *output.lock().expect("audio mutex poisoned") = signals;
                     used = 0;
                 }
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::Interrupted => {
-                if last.elapsed() > Duration::from_secs(2) {
+                if last.elapsed() > Duration::from_secs(2) && analyzer.filled != 0 {
                     analyzer.reset();
                     *output.lock().expect("audio mutex poisoned") = analyzer.signals;
                 }
@@ -373,8 +374,8 @@ impl LiveAudio {
             self.running.store(false, Ordering::Release);
             if let Some(worker) = self.worker.take() {
                 if worker.join().is_err() { eprintln!("Audio worker panicked"); }
+                *self.values.lock().expect("audio mutex poisoned") = Signals::default();
             }
-            *self.values.lock().expect("audio mutex poisoned") = Signals::default();
         } else if self.worker.is_none() {
             self.running.store(true, Ordering::Release);
             let running = self.running.clone();
@@ -396,7 +397,7 @@ impl LiveAudio {
             }
         }
     }
-    pub fn snapshot(&self) -> Signals { *self.values.lock().expect("audio mutex poisoned") }
+    pub fn snapshot(&self) -> Signals { if self.worker.is_some() { *self.values.lock().expect("audio mutex poisoned") } else { Signals::default() } }
 }
 impl Drop for LiveAudio {
     fn drop(&mut self) { self.set_active(false, 1.0); }
@@ -436,6 +437,24 @@ pub fn diagnose(target: Option<String>, sensitivity: f32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spectrum_separates_tones_and_resets() {
+        let mut a = Analyzer::new(1.);
+        let peak = |s: Signals| s.spectrum.iter().enumerate().max_by(|a,b| a.1.total_cmp(b.1)).unwrap().0;
+        let mut peaks = Vec::new();
+        for hz in [100., 2000.] {
+            a.reset();
+            for block in 0..20 {
+                let samples = std::array::from_fn(|i| 0.3*(std::f32::consts::TAU*hz*(block*BLOCK+i) as f32/RATE).sin());
+                a.process(&samples);
+            }
+            assert!(a.signals.spectrum.iter().all(|v| (0.0..=1.0).contains(v)));
+            peaks.push(peak(a.signals));
+        }
+        assert!(peaks[1] > peaks[0]+15);
+        a.reset();
+        assert_eq!(a.signals.spectrum,[0.;SPECTRUM_BANDS]);
+    }
     #[test]
     fn logarithmic_response_preserves_endpoints_and_boosts_quiet_input() {
         let response = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1., logarithmic: true };
