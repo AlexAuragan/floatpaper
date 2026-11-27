@@ -832,6 +832,7 @@ impl Passes<'_> {
                 resolve_target: None,
                 ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
             })],
+            depth_stencil_attachment: None,
             timestamp_writes,
             occlusion_query_set: None,
         })
