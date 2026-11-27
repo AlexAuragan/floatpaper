@@ -709,7 +709,6 @@ pub struct Renderer {
     width: u32,
     height: u32,
     output_format: wgpu::TextureFormat,
-    internal_format: wgpu::TextureFormat,
     pixel_scale: f32,
     text_paused: bool,
     geometry: wgpu::RenderPipeline,
@@ -723,9 +722,6 @@ pub struct Renderer {
     targets: [Target; 4], // 0,1 layer ping-pong; 2,3 scene ping-pong
     static_cache: Option<StaticLayerCache>,
     prefix_cache: Option<StaticPrefixCache>,
-    layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    geometry_uniform: wgpu::Buffer,
     composite: wgpu::RenderPipeline,
     present: wgpu::RenderPipeline,
     layers: Vec<LayerPipeline>,
@@ -923,7 +919,6 @@ impl Renderer {
                 width,
                 height,
                 output_format,
-                internal_format,
                 pixel_scale: 1.0,
                 text_paused: false,
                 geometry,
@@ -937,9 +932,6 @@ impl Renderer {
                 targets,
                 static_cache,
                 prefix_cache,
-                layout,
-                sampler,
-                geometry_uniform,
                 composite,
                 present,
                 layers,
@@ -1002,45 +994,6 @@ impl Renderer {
             if let Some(cache) = &mut self.static_cache { cache.valid = false; }
             if let Some(cache) = &mut self.prefix_cache { cache.valid = false; }
         }
-    }
-    pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) -> Result<()> {
-        if (width, height) == (self.width, self.height) {
-            return Ok(());
-        }
-        check_size(gpu, width, height)?;
-        self.targets = std::array::from_fn(|_| {
-            Target::new(
-                gpu,
-                &self.layout,
-                &self.sampler,
-                &self.uniform,
-                width,
-                height,
-                self.internal_format,
-            )
-        });
-        // Release old caches before allocating their replacements.
-        self.static_cache = None;
-        self.prefix_cache = None;
-        self.static_cache = StaticLayerCache::new(
-            gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height, self.internal_format,
-        );
-        self.prefix_cache = StaticPrefixCache::new(
-            gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height,
-            self.static_cache.is_some(), self.internal_format,
-        );
-        gpu.queue.write_buffer(
-            &self.geometry_uniform,
-            0,
-            bytemuck::cast_slice(&[width as f32, height as f32, 0., 0.]),
-        );
-        self.width = width;
-        self.height = height;
-        // Do not mix timestamps from different render resolutions in a report.
-        if let Some(old) = self.profiler.take() {
-            self.profiler = Some(FrameProfiler::new(gpu, old.label.clone()));
-        }
-        Ok(())
     }
     pub fn enable_profile(&mut self, gpu: &Gpu, label: String) {
         if gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
