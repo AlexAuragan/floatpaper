@@ -11,14 +11,11 @@ const WINDOW: usize = 2048;
 const BINS: usize = WINDOW / 2 + 1;
 const DT: f32 = BLOCK as f32 / RATE;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Signals {
     pub onset: f32,
     pub kick: f32,
     pub bass: f32,
-    // RMS magnitude of each positive-frequency FFT bin, before gain/smoothing.
-    pub spectrum: [f32; BINS],
-    pub spectrum_gain: f32,
     pub mid: f32,
     pub treble: f32,
     pub volume: f32,
@@ -34,11 +31,6 @@ pub struct Signals {
     pub onset_count: u64,
     pub kick_count: u64,
 }
-impl Default for Signals {
-    fn default() -> Self { Self { onset: 0., kick: 0., bass: 0., spectrum: [0.; BINS], spectrum_gain: 0., mid: 0., treble: 0., volume: 0., onset_strength: 0., kick_strength: 0., onset_flux: 0., kick_flux: 0., onset_threshold: 0., kick_threshold: 0., onset_linear_flux: 0., kick_linear_flux: 0., onset_count: 0, kick_count: 0 } }
-}
-
-
 // Causal adaptive peak picking: compare positive spectral flux with
 // its recent mean and require a local maximum (one hop of lookahead).
 // See FMP chapter 6, Spectral-Based Novelty and Peak Picking:
@@ -135,7 +127,6 @@ impl Analyzer {
             let hz = k as f32 * RATE / WINDOW as f32;
             let power = self.spectrum[k].norm_sqr() * (2. / (WINDOW as f32 * WINDOW as f32 * 0.375));
             let magnitude = power.sqrt();
-            self.signals.spectrum[k] = magnitude;
             // Log compression makes quieter transients visible; half-wave
             // rectification ignores energy decreases.
             let compressed = (1. + 100. * magnitude).ln();
@@ -155,7 +146,6 @@ impl Analyzer {
                 kick_bins += 1;
             }
         }
-        self.signals.spectrum_gain = 4. * self.sensitivity;
         let rms = energy.map(f32::sqrt);
         let volume = energy.iter().sum::<f32>().sqrt();
         // Equal weighting of the three bands prevents the numerous high
@@ -261,12 +251,11 @@ fn capture(target: Option<&str>, sensitivity: f32, running: &AtomicBool, output:
 #[serde(rename_all = "snake_case")]
 pub enum Signal {
     #[default] Onset,
-    Kick, Bass, Mid, Treble, Volume, OnsetStrength, KickStrength, Band,
+    Kick, Bass, Mid, Treble, Volume, OnsetStrength, KickStrength,
 }
 impl Signal {
     pub fn read(self, s: &Signals) -> f32 {
         match self {
-            Self::Band => 0., // evaluated with the response's frequency range
             Self::Onset => s.onset, Self::Kick => s.kick, Self::Bass => s.bass,
             Self::Mid => s.mid, Self::Treble => s.treble, Self::Volume => s.volume,
             Self::OnsetStrength => s.onset*s.onset_strength,
@@ -284,7 +273,6 @@ pub struct Response {
     #[serde(default = "default_decay")] pub decay: f32,
     #[serde(default = "default_power")] pub power: f32,
     #[serde(default)] pub logarithmic: bool,
-    #[serde(default)] pub frequency: Option<[f32; 2]>,
 }
 impl Response {
     pub fn validate(self) -> Result<()> {
@@ -293,34 +281,10 @@ impl Response {
         }
         if !(0.1..=8.0).contains(&self.power) { bail!("Audio power must be 0.1..=8"); }
         if self.logarithmic && self.power != 1.0 { bail!("Logarithmic audio response cannot be combined with nondefault power"); }
-        match (self.signal, self.frequency) {
-            (Signal::Band, Some([lo, hi])) if lo >= 0. && hi <= RATE*0.5 && hi-lo >= RATE/WINDOW as f32 => {},
-            (Signal::Band, _) => bail!("Audio band requires frequency = [low, high] in Hz, within 0..24000 and at least 23.4375 Hz wide"),
-            (_, Some(_)) => bail!("Audio frequency requires signal = \"band\""),
-            _ => {}
-        }
         Ok(())
     }
-    pub fn key(self) -> (Signal,u32,u32,u32,u32,u32,bool) {
-        let [lo,hi] = self.frequency.unwrap_or([0.,0.]);
-        (self.signal,self.attack.to_bits(),self.decay.to_bits(),self.power.to_bits(),lo.to_bits(),hi.to_bits(),self.logarithmic)
-    }
-    fn input(self, signals: &Signals) -> f32 {
-        if let Some([lo,hi]) = self.frequency {
-            // Fractional bin overlap provides continuous control of the band edges.
-            let step = RATE / WINDOW as f32;
-            let first = ((lo / step - 0.5).floor() as usize).max(1);
-            let last = ((hi / step + 0.5).ceil() as usize).min(BINS-2);
-            let mut energy = 0.;
-            for k in first..=last {
-                let center = k as f32 * step;
-                let fraction = ((hi.min(center+step*0.5)-lo.max(center-step*0.5))/step).clamp(0.,1.);
-                energy += signals.spectrum[k].powi(2)*fraction;
-            }
-            (energy.sqrt()*signals.spectrum_gain).clamp(0.,1.)
-        } else {
-            self.signal.read(signals)
-        }
+    pub fn key(self) -> (Signal,u32,u32,u32,bool) {
+        (self.signal,self.attack.to_bits(),self.decay.to_bits(),self.power.to_bits(),self.logarithmic)
     }
 }
 #[derive(Debug, Clone, Copy, Default)]
@@ -328,7 +292,7 @@ pub struct Modulation { pub value: f32, pub integral: f64 }
 #[derive(Default)]
 pub struct Frame {
     pub signals: Signals,
-    values: std::collections::BTreeMap<(Signal,u32,u32,u32,u32,u32,bool), Modulation>,
+    values: std::collections::BTreeMap<(Signal,u32,u32,u32,bool), Modulation>,
 }
 impl Frame {
     pub fn get(&self, response: Response) -> Modulation {
@@ -339,7 +303,7 @@ impl Frame {
         for response in responses {
             let state = self.values.entry(response.key()).or_default();
             if !active { state.value = 0.; continue; }
-            let input = response.input(&signals).clamp(0.,1.);
+            let input = response.signal.read(&signals).clamp(0.,1.);
             let target = if response.logarithmic { (9.0 * input).ln_1p() / std::f32::consts::LN_10 } else if response.power == 1.0 { input } else if response.power == 2.0 { input*input } else { input.powf(response.power) };
             let tau = if target > state.value { response.attack } else { response.decay } as f64;
             let old = state.value as f64;
@@ -436,25 +400,8 @@ pub fn diagnose(target: Option<String>, sensitivity: f32) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
-    fn custom_band_rejects_high_frequency_tone() {
-        let band = Response { signal: Signal::Band, attack: 0., decay: 0., power: 1., logarithmic: false, frequency: Some([40.,100.]) };
-        band.validate().unwrap();
-        let mut a = Analyzer::new(1.);
-        for block in 0..20 {
-            let samples = std::array::from_fn(|i| 0.3*(std::f32::consts::TAU*70.*(block*BLOCK+i) as f32/RATE).sin());
-            a.process(&samples);
-        }
-        assert!(band.input(&a.signals) > 0.5);
-        a.reset();
-        for block in 0..20 {
-            let samples = std::array::from_fn(|i| 0.3*(std::f32::consts::TAU*750.*(block*BLOCK+i) as f32/RATE).sin());
-            a.process(&samples);
-        }
-        assert!(band.input(&a.signals) < 0.01);
-    }
-    #[test]
     fn logarithmic_response_preserves_endpoints_and_boosts_quiet_input() {
-        let response = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1., logarithmic: true, frequency: None };
+        let response = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1., logarithmic: true };
         response.validate().unwrap();
         let mut frame = Frame::default();
         for (volume, expected) in [(0.,0.), (0.5, 5.5_f32.ln()/std::f32::consts::LN_10), (1.,1.)] {
@@ -464,7 +411,7 @@ mod tests {
     }
     #[test]
     fn response_power_is_applied_before_smoothing_and_integration() {
-        let linear = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1., logarithmic: false, frequency: None };
+        let linear = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1., logarithmic: false };
         let squared = Response { power: 2., ..linear };
         let mut frame = Frame::default();
         frame.advance(Signals { volume: 0.5, ..Signals::default() }, &[linear,squared], 1., true);
