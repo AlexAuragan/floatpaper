@@ -1541,7 +1541,7 @@ fn compile_effects(
                 }
                 EffectKind::Glitch => vec![(
                     "glitch",
-                    Cow::Borrowed(include_str!("../shaders/glitch.wgsl")),
+                    Cow::Owned(format!("const GLITCH_CONTINUOUS: bool = {};\n{}", e.continuous, include_str!("../shaders/glitch.wgsl"))),
                 )],
                 EffectKind::Blur => {
                     vec![("blur", Cow::Borrowed(include_str!("../shaders/blur.wgsl")))]
