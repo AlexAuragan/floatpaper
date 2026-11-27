@@ -1,0 +1,416 @@
+# Crystallized — floating faceted diamond in a luminous crystal cavern.
+fps = 30
+loop_seconds = 120.0
+seed = 152
+background = "#071b39"
+size_reference_aspect = 1.7777778
+effects = [{ kind = "custom", shader = "../shaders/custom_vignette.wgsl", intensity = 0.30 }]
+
+[[layers]]
+name = "blue cavern light"
+background = "#071b39"
+effects = [{ kind = "custom", shader = "../shaders/crystal_light.wgsl", period = 30.0 }]
+[[layers]]
+name = "suspended dust"
+
+[[layers.shapes]]
+kind = "circle"
+center = [0.5,0.5]
+size = [0.005,0.005]
+color = "#9beaff"
+count = 75
+spread = [0.48,0.48]
+size_jitter = 0.7
+opacity = 0.45
+motion = "drift"
+radius = [0.025,0.04]
+period = 40
+pulse = 0.65
+
+[[layers]]
+name = "distant rock aperture"
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/cave_rim.svg"
+center = [0.5,0.5]
+size = [2.65,1.49]
+color = "#123557"
+raster_size = 1536
+
+[[layers]]
+name = "crystal veins"
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.8863220427729952,0.5589153069232462]
+size = [0.18,0.18]
+color = "#ffffff"
+preserve_color = true
+rotation = -82.125
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.8364664105313389,0.7174326705525333]
+size = [0.245,0.245]
+color = "#ffffff"
+preserve_color = true
+rotation = -59.625
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.7353868173618929,0.842847881122264]
+size = [0.31,0.31]
+color = "#ffffff"
+preserve_color = true
+rotation = -37.125
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.5984717150359116,0.9160676097149116]
+size = [0.375,0.375]
+color = "#ffffff"
+preserve_color = true
+rotation = -14.625
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.44656518674403256,0.9259448163907382]
+size = [0.18,0.18]
+color = "#ffffff"
+preserve_color = true
+rotation = 7.875
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.30279362438258606,0.8709757859704506]
+size = [0.245,0.245]
+color = "#ffffff"
+preserve_color = true
+rotation = 30.375
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.18904494502864427,0.7595290550400358]
+size = [0.31,0.31]
+color = "#ffffff"
+preserve_color = true
+rotation = 52.875
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.12263635397949868,0.6085713781165181]
+size = [0.375,0.375]
+color = "#ffffff"
+preserve_color = true
+rotation = 75.375
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.11367795722700486,0.44108469307675385]
+size = [0.18,0.18]
+color = "#ffffff"
+preserve_color = true
+rotation = 97.875
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.16353358946866114,0.28256732944746676]
+size = [0.245,0.245]
+color = "#ffffff"
+preserve_color = true
+rotation = 120.37499999999997
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.26461318263810707,0.157152118877736]
+size = [0.31,0.31]
+color = "#ffffff"
+preserve_color = true
+rotation = 142.875
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.4015282849640881,0.08393239028508837]
+size = [0.375,0.375]
+color = "#ffffff"
+preserve_color = true
+rotation = 165.37499999999997
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.5534348132559674,0.07405518360926178]
+size = [0.18,0.18]
+color = "#ffffff"
+preserve_color = true
+rotation = 187.875
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.6972063756174137,0.1290242140295494]
+size = [0.245,0.245]
+color = "#ffffff"
+preserve_color = true
+rotation = 210.37499999999994
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.8109550549713557,0.24047094495996418]
+size = [0.31,0.31]
+color = "#ffffff"
+preserve_color = true
+rotation = 232.875
+opacity = 0.85
+raster_size = 384
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.8773636460205012,0.39142862188348176]
+size = [0.375,0.375]
+color = "#ffffff"
+preserve_color = true
+rotation = 255.375
+opacity = 0.85
+raster_size = 384
+
+[[layers]]
+name = "near rock aperture"
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/cave_rim.svg"
+center = [0.5,0.5]
+size = [2.2,1.25]
+color = "#081b32"
+raster_size = 1536
+
+[[layers]]
+name = "foreground crystals"
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.9574800718694058,0.5501736623684736]
+size = [0.22,0.22]
+color = "#ffffff"
+preserve_color = true
+rotation = -84
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.8721478174124758,0.782136921100387]
+size = [0.28,0.28]
+color = "#ffffff"
+preserve_color = true
+rotation = -54
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.6870988558148681,0.9385018196684485]
+size = [0.33999999999999997,0.33999999999999997]
+color = "#ffffff"
+preserve_color = true
+rotation = -24
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.45191690689687947,0.9773705097767712]
+size = [0.22,0.22]
+color = "#ffffff"
+preserve_color = true
+rotation = 6
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.22961878394546242,0.8883281572999748]
+size = [0.28,0.28]
+color = "#ffffff"
+preserve_color = true
+rotation = 36
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.07976908948440364,0.6952335886763842]
+size = [0.33999999999999997,0.33999999999999997]
+color = "#ffffff"
+preserve_color = true
+rotation = 66
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.04251992813059424,0.44982633763152635]
+size = [0.22,0.22]
+color = "#ffffff"
+preserve_color = true
+rotation = 96.00000000000003
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.12785218258752412,0.21786307889961298]
+size = [0.28,0.28]
+color = "#ffffff"
+preserve_color = true
+rotation = 126
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.3129011441851316,0.061498180331551744]
+size = [0.33999999999999997,0.33999999999999997]
+color = "#ffffff"
+preserve_color = true
+rotation = 155.99999999999997
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.5480830931031204,0.0226294902232288]
+size = [0.22,0.22]
+color = "#ffffff"
+preserve_color = true
+rotation = 185.99999999999994
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.7703812160545372,0.11167184270002489]
+size = [0.28,0.28]
+color = "#ffffff"
+preserve_color = true
+rotation = 215.99999999999994
+raster_size = 512
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_cluster.svg"
+center = [0.9202309105155965,0.3047664113236159]
+size = [0.33999999999999997,0.33999999999999997]
+color = "#ffffff"
+preserve_color = true
+rotation = 246
+raster_size = 512
+
+[[layers]]
+name = "diamond radiance"
+effects = [{ kind = "blur", intensity = 13.0 }]
+[[layers.shapes]]
+kind = "circle"
+center = [0.5,0.5]
+size = [0.34,0.34]
+color = "#39adf9"
+opacity = 0.18
+pulse = 0.35
+period = 10
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_diamond.svg"
+center = [0.5,0.5]
+size = [0.25,0.32]
+color = "#62dfff"
+preserve_color = false
+motion = "drift"
+radius = [0.008,0.019]
+period = 20
+pulse = 0.045
+raster_size = 768
+opacity = 0.65
+
+[[layers]]
+name = "ancient field"
+
+[[layers.shapes]]
+kind = "circle"
+center = [0.5,0.5]
+size = [0.38,0.38]
+color = "#80dfff"
+outline = 0.004
+opacity = 0.23
+pulse = 0.12
+period = 20
+
+[[layers.shapes]]
+kind = "circle"
+center = [0.5,0.5]
+size = [0.46,0.46]
+color = "#60a9e2"
+outline = 0.003
+opacity = 0.14
+
+[[layers]]
+name = "floating diamond"
+
+[[layers.shapes]]
+kind = "svg"
+path = "assets/crystal_diamond.svg"
+center = [0.5,0.5]
+size = [0.25,0.32]
+color = "#ffffff"
+preserve_color = true
+motion = "drift"
+radius = [0.008,0.019]
+period = 20
+pulse = 0.045
+raster_size = 768
+
