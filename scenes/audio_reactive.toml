@@ -36,7 +36,6 @@ color = "#526d81"
 opacity = 0.7
 [layers.shapes.audio]
 signal = "bass"
-logarithmic = true
 size = 0.4
 color = "#e8faff"
 opacity = 0.3
@@ -48,9 +47,9 @@ name = "rotating polygon"
 [[layers.effects]]
 kind = "glitch"
 intensity = 0.0
+period = 0.2
 [layers.effects.audio]
 signal = "bass"
-logarithmic = true
 intensity = 0.25
 attack = 0.005
 decay = 0.08
@@ -63,7 +62,6 @@ spin = 0.025
 color = "#b7dce8"
 [layers.shapes.audio]
 signal = "bass"
-logarithmic = true
 spin = 0.2
 position = [0.005, 0.005]
 attack = 0.005
