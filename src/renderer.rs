@@ -4,7 +4,16 @@ use bytemuck::{Pod, Zeroable};
 use std::{borrow::Cow, collections::BTreeMap, fs, ops::Range, path::Path, sync::mpsc, time::Instant};
 use wgpu::util::DeviceExt;
 
-const INTERNAL: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const DEFAULT_INTERNAL: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const COMPACT_INTERNAL: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+fn internal_bytes(format: wgpu::TextureFormat) -> u64 {
+    match format {
+        DEFAULT_INTERNAL => 8,
+        COMPACT_INTERNAL => 4,
+        _ => unreachable!("unsupported intermediate format"),
+    }
+}
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 const MAX_PASSES: usize = 2200; // 64 layers * (16 double-pass effects + composite) + global + present
 const BLEND: wgpu::BlendState = wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING;
@@ -100,6 +109,7 @@ impl Target {
         uniforms: &wgpu::Buffer,
         width: u32,
         height: u32,
+        format: wgpu::TextureFormat,
     ) -> Self {
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("intermediate layer"),
@@ -107,7 +117,7 @@ impl Target {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: INTERNAL,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC
@@ -181,10 +191,10 @@ fn effect_pass_count(effect: &Effect) -> usize {
 // Keep the existing combined cache budget, not a per-texture budget.
 const CACHE_BUDGET: u64 = 64 * 1024 * 1024;
 
-fn cache_fits(width: u32, height: u32, textures: u64) -> bool {
+fn cache_fits(width: u32, height: u32, textures: u64, format: wgpu::TextureFormat) -> bool {
     u64::from(width)
         .checked_mul(u64::from(height))
-        .and_then(|pixels| pixels.checked_mul(8 * textures))
+        .and_then(|pixels| pixels.checked_mul(internal_bytes(format) * textures))
         .is_some_and(|bytes| bytes <= CACHE_BUDGET)
 }
 
@@ -227,11 +237,12 @@ impl StaticPrefixCache {
         width: u32,
         height: u32,
         has_layer_cache: bool,
+        format: wgpu::TextureFormat,
     ) -> Option<Self> {
         let textures = if has_layer_cache { 2 } else { 1 };
         if std::env::var_os("FLOATPAPER_DISABLE_CACHE").is_some()
             || std::env::var_os("FLOATPAPER_DISABLE_PREFIX_CACHE").is_some()
-            || !cache_fits(width, height, textures)
+            || !cache_fits(width, height, textures, format)
         {
             return None;
         }
@@ -241,7 +252,7 @@ impl StaticPrefixCache {
         Some(Self {
             layer,
             effects,
-            target: Target::new(gpu, layout, sampler, uniform, width, height),
+            target: Target::new(gpu, layout, sampler, uniform, width, height, format),
             valid: false,
         })
     }
@@ -278,11 +289,12 @@ impl StaticLayerCache {
         uniform: &wgpu::Buffer,
         width: u32,
         height: u32,
+        format: wgpu::TextureFormat,
     ) -> Option<Self> {
         // Opt-out for visual/performance comparisons; cap extra allocation at
-        // 64 MiB per output (RGBA16Float = 8 bytes per pixel).
+        // 64 MiB per output, accounting for the selected texture format.
         if std::env::var_os("FLOATPAPER_DISABLE_CACHE").is_some()
-            || !cache_fits(width, height, 1)
+            || !cache_fits(width, height, 1, format)
         {
             return None;
         }
@@ -290,7 +302,7 @@ impl StaticLayerCache {
         eprintln!("Static layer cache: {}..{} ({}x{})", range.start, range.end, width, height);
         Some(Self {
             range,
-            target: Target::new(gpu, layout, sampler, uniform, width, height),
+            target: Target::new(gpu, layout, sampler, uniform, width, height, format),
             valid: false,
         })
     }
@@ -532,6 +544,7 @@ pub struct Renderer {
     width: u32,
     height: u32,
     output_format: wgpu::TextureFormat,
+    internal_format: wgpu::TextureFormat,
     geometry: wgpu::RenderPipeline,
     geometry_cutout: wgpu::RenderPipeline,
     geo_bind: wgpu::BindGroup,
@@ -644,8 +657,14 @@ impl Renderer {
                 min_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             });
+            let internal_format = if std::env::var_os("FLOATPAPER_COMPACT_INTERMEDIATES").is_some() {
+                COMPACT_INTERNAL
+            } else {
+                DEFAULT_INTERNAL
+            };
+            eprintln!("Intermediate texture format: {internal_format:?}");
             let targets = std::array::from_fn(|_| {
-                Target::new(gpu, &layout, &sampler, &uniform, width, height)
+                Target::new(gpu, &layout, &sampler, &uniform, width, height, internal_format)
             });
             let geo_shader = d.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("geometry"),
@@ -658,7 +677,7 @@ impl Renderer {
                 "geometry",
                 &geo_shader,
                 &geo_layout,
-                INTERNAL,
+                internal_format,
                 Some(BLEND),
                 &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Instance>() as u64,
@@ -671,7 +690,7 @@ impl Renderer {
                 "geometry cutout",
                 &geo_shader,
                 &geo_layout,
-                INTERNAL,
+                internal_format,
                 Some(CUTOUT_BLEND),
                 &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Instance>() as u64,
@@ -684,7 +703,7 @@ impl Renderer {
                 &layout,
                 "composite",
                 include_str!("../shaders/composite.wgsl"),
-                INTERNAL,
+                internal_format,
                 Some(BLEND),
             );
             let present = effect_pipeline(
@@ -701,7 +720,7 @@ impl Renderer {
                 .map(|l| {
                     Ok(LayerPipeline {
                         effects: compile_effects(
-                            d, &layout, &l.effects, base,
+                            d, &layout, &l.effects, base, internal_format,
                             if std::env::var_os("FLOATPAPER_DISABLE_LAYER_FUSION").is_some() {
                                 None
                             } else {
@@ -717,7 +736,7 @@ impl Renderer {
             } else {
                 Some(FinalPass::Present(output_format))
             };
-            let global = compile_effects(d, &layout, &scene.effects, base, final_output)?;
+            let global = compile_effects(d, &layout, &scene.effects, base, internal_format, final_output)?;
             let background = clear_color(&scene.background)?;
             let instance_capacity = (scene.shape_count() * 3).max(1);
             let instances = d.create_buffer(&wgpu::BufferDescriptor {
@@ -726,15 +745,16 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let static_cache = StaticLayerCache::new(gpu, &scene, &layout, &sampler, &uniform, width, height);
+            let static_cache = StaticLayerCache::new(gpu, &scene, &layout, &sampler, &uniform, width, height, internal_format);
             let prefix_cache = StaticPrefixCache::new(
-                gpu, &scene, &layout, &sampler, &uniform, width, height, static_cache.is_some(),
+                gpu, &scene, &layout, &sampler, &uniform, width, height, static_cache.is_some(), internal_format,
             );
             Ok(Self {
                 scene,
                 width,
                 height,
                 output_format,
+                internal_format,
                 geometry,
                 geometry_cutout,
                 geo_bind,
@@ -777,17 +797,18 @@ impl Renderer {
                 &self.uniform,
                 width,
                 height,
+                self.internal_format,
             )
         });
         // Release old caches before allocating their replacements.
         self.static_cache = None;
         self.prefix_cache = None;
         self.static_cache = StaticLayerCache::new(
-            gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height,
+            gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height, self.internal_format,
         );
         self.prefix_cache = StaticPrefixCache::new(
             gpu, &self.scene, &self.layout, &self.sampler, &self.uniform, width, height,
-            self.static_cache.is_some(),
+            self.static_cache.is_some(), self.internal_format,
         );
         gpu.queue.write_buffer(
             &self.geometry_uniform,
@@ -1299,6 +1320,7 @@ fn compile_effects(
     layout: &wgpu::BindGroupLayout,
     effects: &[Effect],
     base: &Path,
+    internal_format: wgpu::TextureFormat,
     final_output: Option<FinalPass>,
 ) -> Result<Vec<EffectPipeline>> {
     effects
@@ -1350,7 +1372,7 @@ fn compile_effects(
                     FinalPass::Composite(opacity) => {
                         let label = composite_effect_label(e.kind);
                         eprintln!("Layer effect fusion: {label} (opacity={opacity})");
-                        (composite_effect_body(&bodies[0].1, opacity), label, INTERNAL, Some(BLEND))
+                        (composite_effect_body(&bodies[0].1, opacity), label, internal_format, Some(BLEND))
                     }
                 };
                 return Ok(EffectPipeline {
@@ -1363,7 +1385,7 @@ fn compile_effects(
                 config: e.clone(),
                 passes: bodies
                     .iter()
-                    .map(|(label, body)| effect_pipeline(d, layout, label, body, INTERNAL, None))
+                    .map(|(label, body)| effect_pipeline(d, layout, label, body, internal_format, None))
                     .collect(),
                 terminal: false,
             })
@@ -1523,9 +1545,12 @@ effects = [{kind = "crt"}]
         s.layers[1].effects = vec![grid, glitch.clone()];
         s.layers[2].effects = vec![blur, glitch];
         assert_eq!(static_prefix(&s), Some((2, 1)));
-        assert!(cache_fits(1440, 2560, 2));
-        assert!(cache_fits(3840, 2160, 1));
-        assert!(!cache_fits(3840, 2160, 2));
+        assert!(cache_fits(1440, 2560, 2, DEFAULT_INTERNAL));
+        assert!(cache_fits(3840, 2160, 1, DEFAULT_INTERNAL));
+        assert!(!cache_fits(3840, 2160, 2, DEFAULT_INTERNAL));
+        assert!(cache_fits(3840, 2160, 2, COMPACT_INTERNAL));
+        assert_eq!(internal_bytes(DEFAULT_INTERNAL), 8);
+        assert_eq!(internal_bytes(COMPACT_INTERNAL), 4);
     }
 
 

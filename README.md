@@ -165,6 +165,12 @@ Transparent geometry layers with exactly one fused glitch effect use a conservat
 
 Set `FLOATPAPER_DISABLE_SPARSE_GLITCH=1` to compare against the original full-screen path. The profiler reports restricted passes separately as `glitch_composite_sparse`. Compare their sum with the remaining `glitch_composite` category against the previous combined cost. The bounds depend on the geometry and glitch shader implementations; update them if those shaders change.
 
+## Experimental compact intermediate textures
+
+Set `FLOATPAPER_COMPACT_INTERMEDIATES=1` at startup to use RGBA8UnormSrgb rather than the default RGBA16Float for all intermediate render targets and static caches. GPU sRGB encoding/decoding keeps shader operations and blending in linear space. Texture storage is halved, and the existing 64 MiB per-output cache budget accounts for the selected format. The swapchain/export format is unchanged. The selected intermediate format is logged and retained across resize.
+
+This is opt-in because 8-bit RGB and alpha quantization and clamping to [0,1] can change results, especially dark gradients, translucent edges, repeated blending and custom effects that output extended-range values. Do not use it if exact visual fidelity or prior export reproduction is required. Compare both modes with profiling enabled, then measure GPU utilization with profiling disabled.
+
 ## GPU profiling (live or preview)
 
 Run with the optional timestamp profiler enabled:
