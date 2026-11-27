@@ -632,6 +632,10 @@ impl Renderer {
         );
         self.width = width;
         self.height = height;
+        // Do not mix timestamps from different render resolutions in a report.
+        if let Some(old) = self.profiler.take() {
+            self.profiler = Some(FrameProfiler::new(gpu, old.label.clone()));
+        }
         Ok(())
     }
     pub fn enable_profile(&mut self, gpu: &Gpu, label: String) {
