@@ -141,6 +141,12 @@ The prefix texture is populated once with an exact GPU-side texture copy, then s
 
 Set `FLOATPAPER_DISABLE_PREFIX_CACHE=1` to disable just prefix caching, or `FLOATPAPER_DISABLE_CACHE=1` to disable both. These are startup options and do not change scene files.
 
+## Procedural noise
+
+The default noise shader uses one PCG hash per temporal endpoint (two per pixel), extracting two 16-bit samples from each hash to retain the original 0.72/0.28 weighted grain distribution. Temporal interpolation and the 256-state cycle are unchanged. The exact random pattern differs from the previous shader, including in offline exports.
+
+Set `FLOATPAPER_LEGACY_NOISE=1` at startup to use the original four-hash shader, for visual comparisons, benchmarks or reproduction of previous renders. No scene changes or additional noise textures are required.
+
 ## GPU profiling (live or preview)
 
 Run with the optional timestamp profiler enabled:
