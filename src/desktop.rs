@@ -3,6 +3,7 @@ use crate::{renderer::{Gpu,Renderer},scene::Scene};
 use anyhow::{bail, Context, Result};
 use calloop::{EventLoop, channel};
 use crate::visibility::{self, HiddenOutputs, Reason};
+use crate::control::{self, Clock};
 use calloop_wayland_source::WaylandSource;
 use notify::{EventKind, RecursiveMode, Watcher};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle};
@@ -27,9 +28,10 @@ struct Desktop {
     main_device:Option<Vec<u8>>,
     feedback_done:bool,
     hidden_outputs:HiddenOutputs,
+    clock:Clock,
     quit:bool,
 }
-impl Default for Desktop { fn default()->Self { Self { compositor:None,layer_shell:None,wm_base:None,outputs:BTreeMap::new(),surfaces:BTreeMap::new(),removed:Vec::new(),want_dmabuf:false,main_device:None,feedback_done:false,hidden_outputs:HiddenOutputs::new(),quit:false } } }
+impl Default for Desktop { fn default()->Self { Self { compositor:None,layer_shell:None,wm_base:None,outputs:BTreeMap::new(),surfaces:BTreeMap::new(),removed:Vec::new(),want_dmabuf:false,main_device:None,feedback_done:false,hidden_outputs:HiddenOutputs::new(),clock:Clock::new(Instant::now()),quit:false } } }
 const PREVIEW:u32=0;
 struct Screen {
     // Drop wgpu surface before releasing native wl_surface (raw handles are borrowed).
@@ -330,6 +332,11 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
     let qh=queue.handle();
     let _registry=display.get_registry(&qh,());
     let live=matches!(&mode,Mode::Live{..});
+    // Reserve the endpoint before creating any wallpaper surfaces. Multiple
+    // independent live processes can explicitly opt out of runtime controls.
+    let control_server=if live && std::env::var_os("FLOATPAPER_DISABLE_CONTROL").is_none() {
+        Some(control::Server::bind()?)
+    } else {None};
     let gpu_choice=if live {GpuChoice::from_env()?} else {GpuChoice::LowPower};
     let mut state=Desktop::default();
     state.want_dmabuf=live && gpu_choice==GpuChoice::Auto;
@@ -390,9 +397,25 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             Err(e)=>eprintln!("Visibility suspension unavailable: {e:#}; rendering all outputs"),
         }
     }
+    if let Some(server)=&control_server {
+        let (tx,rx)=channel::channel::<control::Request>();
+        event_loop.handle().insert_source(rx, |event,_,state| {
+            if let channel::Event::Msg(request)=event {
+                let was_paused=state.clock.paused();
+                state.clock.apply(request.command,Instant::now());
+                if was_paused!=state.clock.paused() {
+                    eprintln!("Manual wallpaper state: {}",state.clock.status());
+                }
+                if request.reply.send(state.clock.status()).is_err() {
+                    eprintln!("Control client disconnected before acknowledgement");
+                }
+            }
+        }).map_err(|e|anyhow::anyhow!("Register control channel: {e}"))?;
+        server.start(tx)?;
+    }
     let mut stats=BenchmarkStats::new();
     let mut pool=RenderPool::new();
-    let start=Instant::now();
+    state.clock=Clock::new(Instant::now());
     let mut reload_at=None;
     let mut last_watch_error=None;
     while running.load(Ordering::SeqCst) && !state.quit {
@@ -432,7 +455,8 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             if screen.pending || screen.render.is_none() {
                 configure(&instance,&connection,&gpu,screen,share || benchmark.active())?;
                 screen.pending=false;
-                if benchmark==BenchmarkMode::Hold {screen.last_frame=None;}
+                // A newly configured output needs one frame even if manually paused.
+                if benchmark==BenchmarkMode::Hold || state.clock.paused() {screen.last_frame=None;}
             }
         }
         reconcile_renderers(&gpu,&state,&mut pool,&scene,base,share,benchmark)?;
@@ -451,6 +475,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
             // exposes an unmapped layer. Keep the last buffer while paused.
             // Do not bypass an outstanding Wayland frame callback on resume.
             if reason==Some(Reason::PoweredOff) || (reason.is_some() && screen.last_frame.is_some()) { continue; }
+            if state.clock.paused() && screen.last_frame.is_some() { continue; }
             if !screen.ready || !benchmark.should_present(screen.last_frame) { continue; }
             let r=screen.render.as_ref().context("Surface not configured")?;
             let key=RenderKey::new(&r.config,id,share);
@@ -459,7 +484,7 @@ pub fn run(path:&Path,mode:Mode)->Result<()> {
                 let remaining=interval.saturating_sub(now.saturating_duration_since(last));
                 if !remaining.is_zero() { timeout=timeout.min(remaining); continue; }
             }
-            let frame_time=if benchmark.frozen() {0.0} else {now.duration_since(start).as_secs_f64()};
+            let frame_time=if benchmark.frozen() {0.0} else {state.clock.elapsed(now).as_secs_f64()};
             match draw(&gpu,screen,group,&qh,frame_time,now,interval,benchmark)? {
                 Some(rendered)=>{
                     screen.last_frame=Some(now);
