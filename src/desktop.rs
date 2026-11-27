@@ -612,6 +612,14 @@ fn watch(path:&Path,scene:&Scene)->Result<(mpsc::Receiver<notify::Result<notify:
     for effect in scene.effects.iter().chain(scene.layers.iter().flat_map(|l|l.effects.iter())) {
         if let Some(p)=&effect.shader { let full=base.join(p).canonicalize()?; if let Some(dir)=full.parent() { if !dir.starts_with(base) { dirs.insert(dir.to_path_buf()); } } }
     }
+    for shape in scene.layers.iter().flat_map(|layer| &layer.shapes) {
+        if let Some(p)=&shape.path {
+            let full=base.join(p).canonicalize()?;
+            if let Some(dir)=full.parent() {
+                if !dir.starts_with(base) { dirs.insert(dir.to_path_buf()); }
+            }
+        }
+    }
     for dir in dirs { watcher.watch(&dir,RecursiveMode::NonRecursive)?; }
     Ok((rx,watcher))
 }
