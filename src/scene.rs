@@ -155,6 +155,7 @@ pub enum ShapeKind {
     Triangle,
     Polygon,
     Ray,
+    Spectrum,
     Svg,
     Text,
 }
@@ -273,6 +274,18 @@ pub struct Shape {
     #[serde(default = "raster_size_default")] pub raster_size: u32,
     #[serde(default)] pub preserve_color: bool,
     #[serde(default)] pub audio: Option<ShapeAudio>,
+    #[serde(default)] pub bars: Option<u32>,
+    #[serde(default)] pub gap: Option<f32>,
+    #[serde(default)] pub attack: Option<f32>,
+    #[serde(default)] pub decay: Option<f32>,
+    #[serde(default)] pub logarithmic: Option<bool>,
+}
+impl Shape {
+    fn spectrum_bars(&self) -> u32 { self.bars.unwrap_or(64) }
+    fn spectrum_response(&self, band: usize) -> Response {
+        Response { signal: audio::Signal::Spectrum(band as u8), attack: self.attack.unwrap_or(0.005),
+            decay: self.decay.unwrap_or(0.08), power: 1., logarithmic: self.logarithmic.unwrap_or(true) }
+    }
 }
 fn font_size_default() -> f32 { 64.0 }
 fn line_height_default() -> f32 { 1.2 }
@@ -341,6 +354,9 @@ impl Scene {
             .filter_map(|s| s.audio.as_ref().map(ShapeAudio::response))
             .chain(self.effects.iter().chain(self.layers.iter().flat_map(|l| &l.effects))
                 .filter_map(|e| e.audio.as_ref().map(EffectAudio::response))).collect();
+        for shape in self.layers.iter().flat_map(|l| &l.shapes).filter(|s| matches!(s.kind, ShapeKind::Spectrum)) {
+            responses.extend((0..audio::SPECTRUM_BANDS).map(|i| shape.spectrum_response(i)));
+        }
         responses.sort_by_key(|r| r.key());
         responses.dedup_by_key(|r| r.key());
         responses
@@ -349,7 +365,7 @@ impl Scene {
         self.layers
             .iter()
             .flat_map(|l| &l.shapes)
-            .map(|s| s.count as usize)
+            .map(|s| if matches!(s.kind, ShapeKind::Spectrum) { s.spectrum_bars() as usize } else { s.count as usize })
             .sum()
     }
     pub fn validate(&self, base: &Path) -> Result<()> {
@@ -396,6 +412,18 @@ impl Scene {
             validate_effects(&layer.effects, base)?;
             for shape in &layer.shapes {
                 parse_color(&shape.color)?;
+                if matches!(shape.kind, ShapeKind::Spectrum) {
+                    if !(1..=64).contains(&shape.spectrum_bars()) { bail!("Spectrum bars must be 1..=64"); }
+                    if !(0.0..=0.95).contains(&shape.gap.unwrap_or(0.25)) { bail!("Spectrum gap must be 0..=0.95"); }
+                    shape.spectrum_response(0).validate()?;
+                    if shape.count != 1 || shape.audio.is_some() || !matches!(shape.motion, Motion::Static)
+                        || shape.spin != 0. || shape.rotation != 0. || shape.pulse != 0.
+                        || shape.spread != [0.,0.] || shape.size_jitter != 0. {
+                        bail!("Spectrum uses its own bar count and audio response; motion, rotation, pulse and shape audio are unsupported");
+                    }
+                } else if shape.bars.is_some() || shape.gap.is_some() || shape.attack.is_some() || shape.decay.is_some() || shape.logarithmic.is_some() {
+                    bail!("bars/gap/attack/decay/logarithmic at shape level require kind=spectrum");
+                }
                 if let Some(a) = &shape.audio {
                     a.response().validate()?;
                     if !(-0.99..=10.0).contains(&a.size) || !(-1.0..=1.0).contains(&a.opacity) || !(-100.0..=100.0).contains(&a.spin) || !a.position.iter().all(|p| (-1.0..=1.0).contains(p)) { bail!("Invalid shape audio modulation range"); }
@@ -539,6 +567,30 @@ impl Scene {
                         Some(name) => { let a = &self.anchors[name]; [a.center[0] + shape.anchor_offset[0], a.center[1] + shape.anchor_offset[1]] },
                         None => shape.center,
                     }};
+                    if matches!(shape.kind, ShapeKind::Spectrum) {
+                        let bars = shape.spectrum_bars() as usize;
+                        let pitch = size[0] / bars as f32;
+                        let bar_width = pitch * (1. - shape.gap.unwrap_or(0.25));
+                        let left = center[0] - attachment[0]*size[0]/aspect;
+                        let bottom = center[1] + (1.-attachment[1])*size[1];
+                        for i in 0..bars {
+                            let first = i*audio::SPECTRUM_BANDS/bars;
+                            let end = (i+1)*audio::SPECTRUM_BANDS/bars;
+                            let value = (first..end).map(|band| audio.get(shape.spectrum_response(band)).value).fold(0.0_f32, f32::max);
+                            if value <= 0.0001 { continue; }
+                            let h = size[1]*value;
+                            let instance = Instance {
+                                center_size: [left+(i as f32+0.5)*pitch/aspect, bottom-h*0.5, bar_width, h],
+                                color: [color[0],color[1],color[2],color[3]*shape.opacity],
+                                params: [0.,1.,4.,shape.outline],
+                            };
+                            match shape.composite {
+                                ShapeComposite::Over => out.over.push(instance),
+                                ShapeComposite::Cutout => out.cutout.push(instance),
+                            }
+                        }
+                        continue;
+                    }
                     for i in 0..shape.count {
                         let key = self.seed
                             ^ (li as u64).wrapping_mul(0xD6E8FEB86659FD93)
@@ -612,6 +664,7 @@ impl Scene {
                         let (kind, sides) = match shape.kind {
                             ShapeKind::Circle => (0., 3.),
                             ShapeKind::Rectangle => (1., 4.),
+                            ShapeKind::Spectrum => unreachable!("spectrum expanded above"),
                             ShapeKind::Triangle => (2., 3.),
                             ShapeKind::Polygon => (2., shape.sides as f32),
                             ShapeKind::Ray => (4., shape.fade),
@@ -777,6 +830,35 @@ mod tests {
         for name in ["minimal.toml", "pure_black.toml", "cutout.toml", "spaceship_loading.toml", "spaceship_telemetry.toml", "audio_reactive.toml"] {
             Scene::load(&root.join("scenes").join(name)).unwrap();
         }
+    }
+    #[test]
+    fn spectrum_bars_grow_from_fixed_bottom_and_hide_in_silence() {
+        let s: Scene = toml::from_str(r#"
+[[layers]]
+name = "spectrum"
+[[layers.shapes]]
+kind = "spectrum"
+bars = 4
+center = [0.5,0.8]
+size = [1.0,0.2]
+attack = 0.0
+decay = 0.0
+logarithmic = false
+"#).unwrap();
+        s.validate(Path::new(".")).unwrap();
+        assert_eq!(s.shape_count(),4);
+        let mut frame = audio::Frame::default();
+        let responses = s.audio_responses();
+        let mut signals = audio::Signals::default();
+        signals.spectrum[0] = 0.5;
+        signals.spectrum[16] = 1.0;
+        frame.advance(signals,&responses,1.,true);
+        let a = s.instances_with_audio(0.,1920.,1080.,1.,&frame);
+        assert_eq!(a[0].over.len(),2);
+        for bar in &a[0].over { assert!((bar.center_size[1]+bar.center_size[3]*0.5-0.9).abs()<1e-6); }
+        assert!((a[0].over[0].center_size[3]-0.1).abs()<1e-6);
+        frame.advance(audio::Signals::default(),&responses,1.,false);
+        assert!(s.instances_with_audio(0.,1920.,1080.,1.,&frame)[0].over.is_empty());
     }
     #[test]
     fn glitch_and_audio_defaults_are_opt_out() {
