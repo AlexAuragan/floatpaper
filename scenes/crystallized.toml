@@ -29,7 +29,7 @@ pulse = 0.65
 
 [[layers]]
 name = "deep crystal veins"
-effects = [{ kind = "custom", shader = "../shaders/material_crystal.wgsl", intensity = 0.3, spacing = 130, rotation = -135, color = "#39749f" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_crystal.wgsl", intensity = 0.3, spacing = 130, rotation = -135, color = "#39749f" }]
 [[layers.shapes]]
 kind = "svg"
 path = "assets/crystal_cluster_deep.svg"
@@ -173,8 +173,8 @@ raster_size = 320
 [[layers]]
 name = "deep rock aperture"
 effects = [
-  { kind = "custom", shader = "../shaders/material_stone.wgsl", intensity = 0.55, spacing = 74, rotation = -135, color = "#24415b" },
-  { kind = "custom", shader = "../shaders/material_contact_shadow.wgsl", intensity = 0.5, spacing = 12, rotation = -135 },
+  { kind = "custom", static = true, shader = "../shaders/material_stone.wgsl", intensity = 0.55, spacing = 74, rotation = -135, color = "#24415b" },
+  { kind = "custom", static = true, shader = "../shaders/material_contact_shadow.wgsl", intensity = 0.5, spacing = 12, rotation = -135 },
 ]
 [[layers.shapes]]
 kind = "svg"
@@ -187,7 +187,7 @@ raster_size = 1536
 
 [[layers]]
 name = "crystal veins"
-effects = [{ kind = "custom", shader = "../shaders/material_crystal.wgsl", intensity = 0.45, spacing = 105, rotation = -135, color = "#6ba9d8" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_crystal.wgsl", intensity = 0.45, spacing = 105, rotation = -135, color = "#6ba9d8" }]
 
 [[layers.shapes]]
 kind = "svg"
@@ -368,8 +368,8 @@ raster_size = 384
 [[layers]]
 name = "distant rock aperture"
 effects = [
-  { kind = "custom", shader = "../shaders/material_stone.wgsl", intensity = 0.7, spacing = 95, rotation = -135, color = "#315c7e" },
-  { kind = "custom", shader = "../shaders/material_contact_shadow.wgsl", intensity = 0.55, spacing = 12, rotation = -135 },
+  { kind = "custom", static = true, shader = "../shaders/material_stone.wgsl", intensity = 0.7, spacing = 95, rotation = -135, color = "#315c7e" },
+  { kind = "custom", static = true, shader = "../shaders/material_contact_shadow.wgsl", intensity = 0.55, spacing = 12, rotation = -135 },
 ]
 
 [[layers.shapes]]
@@ -383,7 +383,7 @@ raster_size = 1536
 
 [[layers]]
 name = "foreground crystals"
-effects = [{ kind = "custom", shader = "../shaders/material_crystal.wgsl", intensity = 0.65, spacing = 85, rotation = -135, color = "#a0e1ff" }]
+effects = [{ kind = "custom", static = true, shader = "../shaders/material_crystal.wgsl", intensity = 0.65, spacing = 85, rotation = -135, color = "#a0e1ff" }]
 
 [[layers.shapes]]
 kind = "svg"
@@ -508,8 +508,8 @@ raster_size = 512
 [[layers]]
 name = "near rock aperture"
 effects = [
-  { kind = "custom", shader = "../shaders/material_stone.wgsl", intensity = 0.8, spacing = 115, rotation = -135, color = "#417ca0" },
-  { kind = "custom", shader = "../shaders/material_contact_shadow.wgsl", intensity = 0.6, spacing = 12, rotation = -135 },
+  { kind = "custom", static = true, shader = "../shaders/material_stone.wgsl", intensity = 0.8, spacing = 115, rotation = -135, color = "#417ca0" },
+  { kind = "custom", static = true, shader = "../shaders/material_contact_shadow.wgsl", intensity = 0.6, spacing = 12, rotation = -135 },
 ]
 
 [[layers.shapes]]
