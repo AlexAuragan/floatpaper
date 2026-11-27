@@ -1,5 +1,6 @@
 mod scene;
 mod sprites;
+mod text_commands;
 mod renderer;
 mod desktop;
 mod visibility;
@@ -19,9 +20,9 @@ enum Action {
     /// Check configuration and animation parameters (no GPU required).
     Validate { scene: PathBuf },
     /// Open a normal Wayland window for scene development.
-    Preview { scene: PathBuf, #[arg(long, default_value_t = 960)] width: u32, #[arg(long, default_value_t = 540)] height: u32 },
+    Preview { scene: PathBuf, #[arg(long, default_value_t = 960)] width: u32, #[arg(long, default_value_t = 540)] height: u32, #[arg(long)] allow_commands: bool },
     /// Draw on Wayland's background layer; defaults to all connected outputs.
-    Live { scene: PathBuf, #[arg(long)] output: Option<String> },
+    Live { scene: PathBuf, #[arg(long)] output: Option<String>, #[arg(long)] allow_commands: bool },
     /// Freeze the running live wallpaper without removing it.
     Pause,
     /// Resume the running live wallpaper.
@@ -51,8 +52,8 @@ fn main() -> Result<()> {
             println!("Configuration only; use preview or export to validate WGSL on a GPU.");
             Ok(())
         }
-        Action::Preview { scene, width, height } => desktop::run(&scene, desktop::Mode::Preview { width, height }),
-        Action::Live { scene, output } => desktop::run(&scene, desktop::Mode::Live { output }),
+        Action::Preview { scene, width, height, allow_commands } => desktop::run(&scene, desktop::Mode::Preview { width, height }, allow_commands),
+        Action::Live { scene, output, allow_commands } => desktop::run(&scene, desktop::Mode::Live { output }, allow_commands),
         Action::Pause => control::send(control::Command::Pause),
         Action::Resume => control::send(control::Command::Resume),
         Action::Toggle => control::send(control::Command::Toggle),
