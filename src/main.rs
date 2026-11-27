@@ -1,4 +1,5 @@
 mod scene;
+mod sprites;
 mod renderer;
 mod desktop;
 mod visibility;
