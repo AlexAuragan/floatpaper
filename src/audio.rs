@@ -265,28 +265,31 @@ impl Signal {
     }
 }
 fn default_attack() -> f32 { 0.01 }
+fn default_power() -> f32 { 1.0 }
 fn default_decay() -> f32 { 0.15 }
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 pub struct Response {
     #[serde(default)] pub signal: Signal,
     #[serde(default = "default_attack")] pub attack: f32,
     #[serde(default = "default_decay")] pub decay: f32,
+    #[serde(default = "default_power")] pub power: f32,
 }
 impl Response {
     pub fn validate(self) -> Result<()> {
         if !(0.0..=5.0).contains(&self.attack) || !(0.0..=10.0).contains(&self.decay) {
             bail!("Audio attack must be 0..=5s and decay 0..=10s");
         }
+        if !(0.1..=8.0).contains(&self.power) { bail!("Audio power must be 0.1..=8"); }
         Ok(())
     }
-    fn key(self) -> (Signal,u32,u32) { (self.signal,self.attack.to_bits(),self.decay.to_bits()) }
+    pub fn key(self) -> (Signal,u32,u32,u32) { (self.signal,self.attack.to_bits(),self.decay.to_bits(),self.power.to_bits()) }
 }
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Modulation { pub value: f32, pub integral: f64 }
 #[derive(Default)]
 pub struct Frame {
     pub signals: Signals,
-    values: std::collections::BTreeMap<(Signal,u32,u32), Modulation>,
+    values: std::collections::BTreeMap<(Signal,u32,u32,u32), Modulation>,
 }
 impl Frame {
     pub fn get(&self, response: Response) -> Modulation {
@@ -297,7 +300,8 @@ impl Frame {
         for response in responses {
             let state = self.values.entry(response.key()).or_default();
             if !active { state.value = 0.; continue; }
-            let target = response.signal.read(signals);
+            let input = response.signal.read(signals).clamp(0.,1.);
+            let target = if response.power == 1.0 { input } else if response.power == 2.0 { input*input } else { input.powf(response.power) };
             let tau = if target > state.value { response.attack } else { response.decay } as f64;
             let old = state.value as f64;
             let target = target as f64;
@@ -392,6 +396,17 @@ pub fn diagnose(target: Option<String>, sensitivity: f32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn response_power_is_applied_before_smoothing_and_integration() {
+        let linear = Response { signal: Signal::Volume, attack: 0., decay: 0., power: 1. };
+        let squared = Response { power: 2., ..linear };
+        let mut frame = Frame::default();
+        frame.advance(Signals { volume: 0.5, ..Signals::default() }, &[linear,squared], 1., true);
+        assert_eq!(frame.get(linear).value, 0.5);
+        assert_eq!(frame.get(squared).value, 0.25);
+        assert_eq!(frame.get(squared).integral, 0.25);
+        assert!(Response { power: 0., ..linear }.validate().is_err());
+    }
     #[test]
     fn impact_amplitude_is_independent_of_detection_threshold() {
         let mut quiet = Peaks { previous: 0.2, previous_amplitude: 0.04, threshold: 0.01,
