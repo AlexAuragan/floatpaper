@@ -10,8 +10,11 @@ const BLOCK: usize = 512;
 const WINDOW: usize = 2048;
 const BINS: usize = WINDOW / 2 + 1;
 const DT: f32 = BLOCK as f32 / RATE;
+pub const SPECTRUM_BANDS: usize = 64;
+const SPECTRUM_MIN: f32 = 30.;
+const SPECTRUM_MAX: f32 = 16000.;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Signals {
     pub onset: f32,
     pub kick: f32,
@@ -28,9 +31,14 @@ pub struct Signals {
     pub kick_threshold: f32,
     pub onset_linear_flux: f32,
     pub kick_linear_flux: f32,
+    pub spectrum: [f32; SPECTRUM_BANDS],
     pub onset_count: u64,
     pub kick_count: u64,
 }
+impl Default for Signals {
+    fn default() -> Self { Self { onset: 0., kick: 0., bass: 0., mid: 0., treble: 0., volume: 0., onset_strength: 0., kick_strength: 0., onset_flux: 0., kick_flux: 0., onset_threshold: 0., kick_threshold: 0., onset_linear_flux: 0., kick_linear_flux: 0., spectrum: [0.; SPECTRUM_BANDS], onset_count: 0, kick_count: 0 } }
+}
+
 // Causal adaptive peak picking: compare positive spectral flux with
 // its recent mean and require a local maximum (one hop of lookahead).
 // See FMP chapter 6, Spectral-Based Novelty and Peak Picking:
@@ -81,6 +89,26 @@ fn impact_strength(amplitude: f32, sensitivity: f32) -> f32 {
     x / (x + 0.02)
 }
 
+// Precompute fractional FFT-bin overlap for each logarithmic band.
+// Narrow low-frequency bands share bins rather than leaving empty bars.
+fn spectrum_map() -> Vec<Vec<(usize, f32)>> {
+    let step = RATE / WINDOW as f32;
+    let norm = 2. / (WINDOW as f32 * WINDOW as f32 * 0.375);
+    (0..SPECTRUM_BANDS).map(|i| {
+        let edge = |j: usize| SPECTRUM_MIN * (SPECTRUM_MAX/SPECTRUM_MIN).powf(j as f32/SPECTRUM_BANDS as f32);
+        let (lo,hi) = (edge(i),edge(i+1));
+        let weights: Vec<_> = (1..BINS-1).filter_map(|k| {
+            let center = k as f32 * step;
+            let overlap = (hi.min(center+step*0.5)-lo.max(center-step*0.5)).max(0.);
+            (overlap > 0.).then_some((k,overlap/step))
+        }).collect();
+        // Keep narrow bands from becoming artificially quiet solely because
+        // they cover less than one FFT bin.
+        let scale = norm * (step/(hi-lo)).max(1.);
+        weights.into_iter().map(|(k,w)| (k,w*scale)).collect()
+    }).collect()
+}
+
 struct Analyzer {
     fft: Arc<dyn Fft<f32>>,
     scratch: Vec<Complex32>,
@@ -90,6 +118,7 @@ struct Analyzer {
     previous: [f32; BINS],
     previous_magnitude: [f32; BINS],
     filled: usize,
+    spectrum_map: Vec<Vec<(usize, f32)>>,
     onset: Peaks,
     kick: Peaks,
     sensitivity: f32,
@@ -103,7 +132,7 @@ impl Analyzer {
             history: [0.; WINDOW],
             window: std::array::from_fn(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / WINDOW as f32).cos()),
             previous: [0.; BINS], previous_magnitude: [0.; BINS], filled: 0, onset: Peaks::default(), kick: Peaks::default(),
-            sensitivity, signals: Signals::default() }
+            spectrum_map: spectrum_map(), sensitivity, signals: Signals::default() }
     }
     fn process(&mut self, samples: &[f32; BLOCK]) -> Signals {
         self.history.copy_within(BLOCK.., 0);
@@ -145,6 +174,10 @@ impl Analyzer {
                 kick_energy += power;
                 kick_bins += 1;
             }
+        }
+        for (i, weights) in self.spectrum_map.iter().enumerate() {
+            let energy = weights.iter().map(|&(k,w)| self.spectrum[k].norm_sqr()*w).sum::<f32>();
+            self.signals.spectrum[i] = (energy.sqrt() * 4. * self.sensitivity).clamp(0.,1.);
         }
         let rms = energy.map(f32::sqrt);
         let volume = energy.iter().sum::<f32>().sqrt();
@@ -252,10 +285,12 @@ fn capture(target: Option<&str>, sensitivity: f32, running: &AtomicBool, output:
 pub enum Signal {
     #[default] Onset,
     Kick, Bass, Mid, Treble, Volume, OnsetStrength, KickStrength,
+    #[serde(skip)] Spectrum(u8),
 }
 impl Signal {
     pub fn read(self, s: &Signals) -> f32 {
         match self {
+            Self::Spectrum(i) => s.spectrum[usize::from(i)],
             Self::Onset => s.onset, Self::Kick => s.kick, Self::Bass => s.bass,
             Self::Mid => s.mid, Self::Treble => s.treble, Self::Volume => s.volume,
             Self::OnsetStrength => s.onset*s.onset_strength,
@@ -277,6 +312,7 @@ pub struct Response {
 }
 impl Response {
     pub fn validate(self) -> Result<()> {
+        if matches!(self.signal, Signal::Spectrum(i) if usize::from(i) >= SPECTRUM_BANDS) { bail!("Invalid spectrum band"); }
         if !(0.0..=5.0).contains(&self.attack) || !(0.0..=10.0).contains(&self.decay) {
             bail!("Audio attack must be 0..=5s and decay 0..=10s");
         }
