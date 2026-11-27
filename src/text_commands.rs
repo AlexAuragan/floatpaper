@@ -3,7 +3,7 @@ use crate::scene::{Scene, TextSource};
 use anyhow::{bail, Context, Result};
 use std::{
     collections::BTreeMap, io::{Read, ErrorKind}, os::fd::AsRawFd,
-    os::unix::process::CommandExt, path::{Path, PathBuf},
+    os::unix::process::CommandExt, path::Path,
     process::{Command, Stdio, Child}, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}},
     thread::{self, JoinHandle}, time::{Duration, Instant},
 };
@@ -153,8 +153,8 @@ mod tests {
     use super::*;
     #[test]
     fn command_success_failure_and_timeout() {
-        let base = PathBuf::from(".");
-        let run = |args: &[&str], timeout| execute(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), &base, timeout, || false);
+        let base = Path::new(".");
+        let run = |args: &[&str], timeout| execute(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), base, timeout, || false);
         assert_eq!(run(&["printf", " 42 \\n"], Duration::from_secs(2)).unwrap(), " 42 ");
         assert!(run(&["false"], Duration::from_secs(2)).is_err());
         assert!(run(&["sleep", "5"], Duration::from_millis(100)).is_err());
