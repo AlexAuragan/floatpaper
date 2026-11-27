@@ -17,11 +17,18 @@ fn effect(uv: vec2<f32>) -> vec4<f32> {
     let luma = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722)) / max(c.a, 0.001);
     // The current battlefield SVGs use near-black weapons and lighter soil.
     // Fade the material out on the darkest pixels, avoiding bright weapon edges.
-    let soil = smoothstep(0.0045, 0.009, luma);
-    let variation = clamp(0.90 + (broad - 0.5) * 0.8 + (ridges - 0.5) * 0.28
-        + (grit - 0.5) * 0.14, 0.50, 1.30);
+    let soil = smoothstep(0.0038, 0.0058, luma);
+    let variation = clamp(0.95 + (broad - 0.5) * 1.35 + (ridges - 0.5) * 0.48
+        + (grit - 0.5) * 0.28, 0.38, 1.55);
     let dust = smoothstep(0.52, 0.85, broad * 0.65 + ridges * 0.35);
     let rgb = c.rgb * mix(1.0, variation, soil * k)
-        + params.color.rgb * c.a * dust * soil * k * 0.055;
-    return vec4(rgb, c.a);
+        + params.color.rgb * c.a * dust * soil * k * 0.22;
+    // Fine pitting and sparse worn highlights on the dark metal pixels.
+    let metal = 1.0 - soil;
+    let pits = ground_noise(p * 28.0 + vec2(61.0, 13.0));
+    let scratches = ground_noise(p * vec2(8.0, 36.0) + vec2(79.0));
+    let wear = smoothstep(0.68, 0.92, scratches) * smoothstep(0.3, 0.8, broad);
+    let worn = rgb * mix(1.0, 0.80 + pits * 0.42, metal * k)
+        + vec3(0.025, 0.018, 0.022) * wear * metal * k * c.a;
+    return vec4(worn, c.a);
 }
