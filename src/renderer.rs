@@ -213,7 +213,8 @@ fn geometry_is_static(layer: &scene::Layer) -> bool {
 
 fn effect_is_static(effect: &Effect) -> bool {
     effect.pulse == 0.0 && effect.audio.is_none()
-        && matches!(effect.kind, EffectKind::Grid | EffectKind::Blur | EffectKind::Crt)
+        && (matches!(effect.kind, EffectKind::Grid | EffectKind::Blur | EffectKind::Crt)
+            || (effect.kind == EffectKind::Custom && effect.static_shader))
 }
 
 fn layer_is_static(layer: &scene::Layer) -> bool {
@@ -1723,6 +1724,34 @@ effects = [{kind = "crt"}]
         s.layers[4].effects[0].kind = EffectKind::Noise;
         assert!(!layer_is_static(&s.layers[4]));
         assert_eq!(static_run(&s), None);
+    }
+
+    #[test]
+    fn static_custom_effects_join_cache_runs_but_dynamic_inputs_do_not() {
+        let mut s = sample_scene();
+        let mut custom: Effect = toml::from_str(r#"
+kind = "custom"
+shader = "material.wgsl"
+static = true
+"#).unwrap();
+        assert!(effect_is_static(&custom));
+        s.layers[3].effects = vec![custom.clone()];
+        assert_eq!(static_run(&s), Some(1..5));
+        s.layers[0].effects = vec![custom.clone()];
+        assert!(!layer_is_static(&s.layers[0]));
+        let glitch: Effect = toml::from_str("kind = \"glitch\"").unwrap();
+        s.layers[3].effects = vec![custom.clone(), glitch.clone(), custom.clone()];
+        assert_eq!(static_prefix(&s), Some((3, 1)));
+        s.layers[3].effects = vec![glitch, custom.clone()];
+        assert_eq!(static_prefix(&s), None);
+        custom.pulse = 0.1;
+        assert!(!effect_is_static(&custom));
+        custom.pulse = 0.0;
+        custom.audio = Some(toml::from_str("intensity = 0.2").unwrap());
+        assert!(!effect_is_static(&custom));
+        custom.audio = None;
+        custom.static_shader = false;
+        assert!(!effect_is_static(&custom));
     }
 
     #[test]
